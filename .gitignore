@@ -1,0 +1,32 @@
+# Dependências
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Next.js (Frontend)
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.vercel/
+
+# Backend
+backend/dist/
+backend/build/
+backend/coverage/
+
+# Arquivos de Ambiente (MUITO IMPORTANTE - Contém senhas)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env
+frontend/.env
+
+# Sistema Operacional
+.DS_Store
+Thumbs.db
+
+# Docker (se tiver volumes locais mapeados na pasta)
+postgres_data/

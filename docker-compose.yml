@@ -1,0 +1,35 @@
+version: '3.7'
+
+services:
+  # --- API Backend (Fastify + Node) ---
+  backend:
+    build: ./backend
+    container_name: crm_backend
+    restart: always
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./backend/src:/app/src
+      # O volume abaixo é um "hack" do Docker para garantir que o node_modules
+      # do container seja usado, e não o da sua máquina local (evita erros de OS)
+      - /app/node_modules
+    command: npm run dev
+
+  # --- Frontend App (Next.js) ---
+  frontend:
+    build: ./frontend
+    container_name: crm_frontend
+    restart: always
+    ports:
+      - "3001:3000" # Mapeia porta 3001 do seu PC para a 3000 do container Next.js
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      # Mesma regra do node_modules para o frontend
+      - /app/node_modules
+    environment:
+      # Variável exposta para o navegador saber onde bater na API
+      - NEXT_PUBLIC_API_URL=http://localhost:3000
+    command: npm run dev
