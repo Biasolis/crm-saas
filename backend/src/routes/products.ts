@@ -6,7 +6,7 @@ import { authenticate } from '../middleware/auth';
 export async function productRoutes(app: FastifyInstance) {
   app.addHook('onRequest', authenticate);
 
-  // --- GET /api/products (Listar) ---
+  // --- GET /api/products (Listar - Permitido para todos) ---
   app.get('/', async (request, reply) => {
     const tenantId = request.user?.tenantId;
     const searchSchema = z.object({
@@ -36,8 +36,12 @@ export async function productRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- POST /api/products (Criar) ---
+  // --- POST /api/products (Criar - Bloqueado para Agente) ---
   app.post('/', async (request, reply) => {
+    if (request.user?.role === 'agent') {
+        return reply.status(403).send({ error: 'Permission denied. Agents cannot create products.' });
+    }
+
     const createProductSchema = z.object({
       name: z.string().min(2),
       description: z.string().optional(),
@@ -62,8 +66,12 @@ export async function productRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- PUT /api/products/:id (Editar) ---
+  // --- PUT /api/products/:id (Editar - Bloqueado para Agente) ---
   app.put('/:id', async (request, reply) => {
+    if (request.user?.role === 'agent') {
+        return reply.status(403).send({ error: 'Permission denied.' });
+    }
+
     const paramsSchema = z.object({ id: z.string().uuid() });
     const updateSchema = z.object({
       name: z.string().min(2),
@@ -92,9 +100,12 @@ export async function productRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- DELETE /api/products/:id (Arquivar/Excluir) ---
-  // Em vez de deletar fisicamente, vamos marcar como inativo para não quebrar propostas antigas
+  // --- DELETE /api/products/:id (Arquivar/Excluir - Bloqueado para Agente) ---
   app.delete('/:id', async (request, reply) => {
+    if (request.user?.role === 'agent') {
+        return reply.status(403).send({ error: 'Permission denied.' });
+    }
+
     const paramsSchema = z.object({ id: z.string().uuid() });
     const { id } = paramsSchema.parse(request.params);
     const tenantId = request.user?.tenantId;

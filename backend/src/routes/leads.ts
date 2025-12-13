@@ -9,7 +9,9 @@ export async function leadRoutes(app: FastifyInstance) {
 
   // --- GET /api/leads (Listar) ---
   app.get('/', async (request, reply) => {
-    const tenantId = request.user?.tenantId;
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
+
     const querySchema = z.object({
         status: z.string().optional()
     });
@@ -19,8 +21,14 @@ export async function leadRoutes(app: FastifyInstance) {
       let queryText = `SELECT * FROM leads WHERE tenant_id = $1`;
       const values: any[] = [tenantId];
 
+      // Filtro de Segurança para Agente
+      if (isAgent) {
+          queryText += ` AND user_id = $${values.length + 1}`;
+          values.push(userId);
+      }
+
       if (status && status !== 'all') {
-          queryText += ` AND status = $2`;
+          queryText += ` AND status = $${values.length + 1}`;
           values.push(status);
       }
 
@@ -46,13 +54,15 @@ export async function leadRoutes(app: FastifyInstance) {
 
     const data = createSchema.parse(request.body);
     const tenantId = request.user?.tenantId;
+    // Se for agent, salva o user_id dele. Se for admin, também salva o dele (owner/admin)
+    const userId = request.user?.userId;
 
     try {
       const result = await db.query(`
-        INSERT INTO leads (tenant_id, name, email, phone, company_name, source, notes)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO leads (tenant_id, user_id, name, email, phone, company_name, source, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
-      `, [tenantId, data.name, data.email, data.phone, data.company_name, data.source, data.notes]);
+      `, [tenantId, userId, data.name, data.email, data.phone, data.company_name, data.source, data.notes]);
 
       return reply.status(201).send(result.rows[0]);
     } catch (error) {
@@ -74,6 +84,7 @@ export async function leadRoutes(app: FastifyInstance) {
 
     const { leads } = importSchema.parse(request.body);
     const tenantId = request.user?.tenantId;
+    const userId = request.user?.userId; // Atribui ao usuário que está importando
 
     const client = await db.getClient();
 
@@ -83,17 +94,17 @@ export async function leadRoutes(app: FastifyInstance) {
       let insertedCount = 0;
 
       for (const lead of leads) {
-        // Verifica duplicidade por email se existir
         if (lead.email) {
             const check = await client.query('SELECT id FROM leads WHERE email = $1 AND tenant_id = $2', [lead.email, tenantId]);
             if (check.rowCount && check.rowCount > 0) continue; 
         }
 
         await client.query(`
-          INSERT INTO leads (tenant_id, name, email, phone, company_name, source)
-          VALUES ($1, $2, $3, $4, $5, $6)
+          INSERT INTO leads (tenant_id, user_id, name, email, phone, company_name, source)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
         `, [
           tenantId, 
+          userId,
           lead.name, 
           lead.email || null, 
           lead.phone || null, 
@@ -117,6 +128,9 @@ export async function leadRoutes(app: FastifyInstance) {
 
   // --- PUT /api/leads/:id (Editar) ---
   app.put('/:id', async (request, reply) => {
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
+
     const paramsSchema = z.object({ id: z.string().uuid() });
     const updateSchema = z.object({
       name: z.string().optional(),
@@ -129,7 +143,6 @@ export async function leadRoutes(app: FastifyInstance) {
 
     const { id } = paramsSchema.parse(request.params);
     const data = updateSchema.parse(request.body);
-    const tenantId = request.user?.tenantId;
 
     try {
       const fields: string[] = [];
@@ -147,45 +160,67 @@ export async function leadRoutes(app: FastifyInstance) {
       if (fields.length === 0) return reply.send({ message: 'No changes' });
 
       values.push(id, tenantId);
-      const query = `UPDATE leads SET ${fields.join(', ')} WHERE id = $${idx} AND tenant_id = $${idx+1} RETURNING *`;
+      let query = `UPDATE leads SET ${fields.join(', ')} WHERE id = $${idx} AND tenant_id = $${idx+1}`;
+
+      // Segurança: Agente só edita o seu
+      if (isAgent) {
+          values.push(userId);
+          query += ` AND user_id = $${idx+2}`;
+      }
+
+      query += ` RETURNING *`;
 
       const result = await db.query(query, values);
+      
+      if (result.rowCount === 0) {
+          return reply.status(404).send({ error: 'Lead not found or permission denied' });
+      }
+
       return result.rows[0];
     } catch (error) {
       return reply.status(500).send({ error: 'Failed to update lead' });
     }
   });
 
-  // --- POST /api/leads/:id/convert (Converter em Cliente) ---
+  // --- POST /api/leads/:id/convert (Converter) ---
   app.post('/:id/convert', async (request, reply) => {
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const tenantId = request.user?.tenantId;
 
     const client = await db.getClient();
     try {
       await client.query('BEGIN');
 
-      const leadRes = await client.query('SELECT * FROM leads WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
-      if (leadRes.rowCount === 0) throw new Error('Lead not found');
+      let leadQuery = 'SELECT * FROM leads WHERE id = $1 AND tenant_id = $2';
+      const queryParams = [id, tenantId];
+      
+      if (isAgent) {
+          leadQuery += ' AND user_id = $3';
+          queryParams.push(userId);
+      }
+
+      const leadRes = await client.query(leadQuery, queryParams);
+      if (leadRes.rowCount === 0) throw new Error('Lead not found or permission denied');
       const lead = leadRes.rows[0];
 
       if (lead.status === 'converted') throw new Error('Lead already converted');
 
-      // 1. Criar Empresa (se houver nome)
+      // 1. Criar Empresa
       let companyId = null;
       if (lead.company_name) {
         const compRes = await client.query(`
-            INSERT INTO companies (tenant_id, name) VALUES ($1, $2) RETURNING id
-        `, [tenantId, lead.company_name]);
+            INSERT INTO companies (tenant_id, user_id, name) VALUES ($1, $2, $3) RETURNING id
+        `, [tenantId, userId, lead.company_name]);
         companyId = compRes.rows[0].id;
       }
 
       // 2. Criar Contato
       const contactRes = await client.query(`
-        INSERT INTO contacts (tenant_id, name, email, phone, company_id)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO contacts (tenant_id, user_id, name, email, phone, company_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
-      `, [tenantId, lead.name, lead.email, lead.phone, companyId]);
+      `, [tenantId, userId, lead.name, lead.email, lead.phone, companyId]);
 
       // 3. Atualizar Lead
       await client.query(`UPDATE leads SET status = 'converted' WHERE id = $1`, [id]);
@@ -207,8 +242,12 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
   
-  // --- DELETE /api/leads/:id ---
+  // --- DELETE /api/leads/:id (Excluir - Bloqueado para Agent) ---
   app.delete('/:id', async (request, reply) => {
+      if (request.user?.role === 'agent') {
+          return reply.status(403).send({ error: 'Permission denied. Agents cannot delete leads.' });
+      }
+
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const tenantId = request.user?.tenantId;
       try {

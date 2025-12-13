@@ -15,13 +15,19 @@ export async function dealRoutes(app: FastifyInstance) {
       value: z.number().optional().default(0),
       expected_close_date: z.string().optional(),
       description: z.string().optional(),
-      user_id: z.string().uuid().optional(), // Responsável
+      user_id: z.string().uuid().optional(), 
     });
 
     const data = createDealSchema.parse(request.body);
     const tenantId = request.user?.tenantId;
-    // Se não vier user_id, assume quem está criando
-    const userId = data.user_id || request.user?.userId;
+    
+    // Se for agent, FORÇA o userId dele. Se for admin, pode atribuir a outro (data.user_id)
+    let userId = data.user_id;
+    if (request.user?.role === 'agent') {
+        userId = request.user.userId;
+    } else if (!userId) {
+        userId = request.user?.userId;
+    }
 
     try {
       const result = await db.query(`
@@ -49,7 +55,9 @@ export async function dealRoutes(app: FastifyInstance) {
 
   // --- GET /api/deals (Listar) ---
   app.get('/', async (request, reply) => {
-    const tenantId = request.user?.tenantId;
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
+
     const querySchema = z.object({
       pipeline_id: z.string().uuid().optional(),
     });
@@ -70,8 +78,13 @@ export async function dealRoutes(app: FastifyInstance) {
       `;
       const values: any[] = [tenantId];
 
+      if (isAgent) {
+          queryText += ` AND d.user_id = $${values.length + 1}`;
+          values.push(userId);
+      }
+
       if (pipeline_id) {
-        queryText += ` AND s.pipeline_id = $2`;
+        queryText += ` AND s.pipeline_id = $${values.length + 1}`;
         values.push(pipeline_id);
       }
 
@@ -86,23 +99,29 @@ export async function dealRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- PUT /api/deals/:id/move (Mover de Coluna) ---
+  // --- PUT /api/deals/:id/move (Mover) ---
   app.put('/:id/move', async (request, reply) => {
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
     const paramsSchema = z.object({ id: z.string().uuid() });
     const bodySchema = z.object({ stage_id: z.string().uuid() });
 
     const { id } = paramsSchema.parse(request.params);
     const { stage_id } = bodySchema.parse(request.body);
-    const tenantId = request.user?.tenantId;
 
     try {
-      const result = await db.query(`
-        UPDATE deals SET stage_id = $1 
-        WHERE id = $2 AND tenant_id = $3
-        RETURNING *
-      `, [stage_id, id, tenantId]);
+      let query = `UPDATE deals SET stage_id = $1 WHERE id = $2 AND tenant_id = $3`;
+      const params = [stage_id, id, tenantId];
 
-      if (result.rowCount === 0) return reply.status(404).send({ error: 'Deal not found' });
+      if (isAgent) {
+          query += ' AND user_id = $4';
+          params.push(userId);
+      }
+      query += ' RETURNING *';
+
+      const result = await db.query(query, params);
+
+      if (result.rowCount === 0) return reply.status(404).send({ error: 'Deal not found or permission denied' });
       return result.rows[0];
     } catch (error) {
       console.error(error);
@@ -110,8 +129,11 @@ export async function dealRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- PUT /api/deals/:id (Editar Dados Gerais) ---
+  // --- PUT /api/deals/:id (Editar) ---
   app.put('/:id', async (request, reply) => {
+    // Mesma lógica de segurança
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
     const paramsSchema = z.object({ id: z.string().uuid() });
     const updateSchema = z.object({
       title: z.string().min(1),
@@ -123,17 +145,28 @@ export async function dealRoutes(app: FastifyInstance) {
 
     const { id } = paramsSchema.parse(request.params);
     const data = updateSchema.parse(request.body);
-    const tenantId = request.user?.tenantId;
 
     try {
-      const result = await db.query(`
+      // Agent não pode mudar o dono (user_id)
+      let targetUserId = data.user_id;
+      if (isAgent) targetUserId = userId; 
+
+      let query = `
         UPDATE deals 
         SET title = $1, value = $2, contact_id = $3, description = $4, user_id = $5
         WHERE id = $6 AND tenant_id = $7
-        RETURNING *
-      `, [data.title, data.value, data.contact_id, data.description, data.user_id, id, tenantId]);
+      `;
+      const params = [data.title, data.value, data.contact_id, data.description, targetUserId, id, tenantId];
 
-      if (result.rowCount === 0) return reply.status(404).send({ error: 'Deal not found' });
+      if (isAgent) {
+          query += ' AND user_id = $8';
+          params.push(userId);
+      }
+      query += ' RETURNING *';
+
+      const result = await db.query(query, params);
+
+      if (result.rowCount === 0) return reply.status(404).send({ error: 'Deal not found or permission denied' });
       return result.rows[0];
     } catch (error) {
       console.error(error);
@@ -141,8 +174,11 @@ export async function dealRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- DELETE /api/deals/:id (Excluir) ---
+  // --- DELETE /api/deals/:id (Excluir - Bloqueado) ---
   app.delete('/:id', async (request, reply) => {
+    if (request.user?.role === 'agent') {
+        return reply.status(403).send({ error: 'Permission denied.' });
+    }
     const paramsSchema = z.object({ id: z.string().uuid() });
     const { id } = paramsSchema.parse(request.params);
     const tenantId = request.user?.tenantId;
@@ -165,16 +201,21 @@ export async function dealRoutes(app: FastifyInstance) {
   // ==========================================
   // SUB-ROTAS DE COMENTÁRIOS
   // ==========================================
-
-  // GET /api/deals/:id/comments
   app.get('/:id/comments', async (request, reply) => {
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
     const paramsSchema = z.object({ id: z.string().uuid() });
     const { id } = paramsSchema.parse(request.params);
-    const tenantId = request.user?.tenantId;
 
     try {
-      // Verifica se o deal pertence ao tenant
-      const dealCheck = await db.query('SELECT id FROM deals WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+      let checkQuery = 'SELECT id FROM deals WHERE id = $1 AND tenant_id = $2';
+      const checkParams = [id, tenantId];
+      if (isAgent) {
+          checkQuery += ' AND user_id = $3';
+          checkParams.push(userId);
+      }
+
+      const dealCheck = await db.query(checkQuery, checkParams);
       if (dealCheck.rowCount === 0) return reply.status(404).send({ error: 'Deal not found' });
 
       const result = await db.query(`
@@ -192,19 +233,24 @@ export async function dealRoutes(app: FastifyInstance) {
     }
   });
 
-  // POST /api/deals/:id/comments
   app.post('/:id/comments', async (request, reply) => {
     const paramsSchema = z.object({ id: z.string().uuid() });
     const bodySchema = z.object({ content: z.string().min(1) });
     
     const { id } = paramsSchema.parse(request.params);
     const { content } = bodySchema.parse(request.body);
-    const tenantId = request.user?.tenantId;
-    const userId = request.user?.userId;
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
 
     try {
-       // Verifica permissão
-       const dealCheck = await db.query('SELECT id FROM deals WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+       let checkQuery = 'SELECT id FROM deals WHERE id = $1 AND tenant_id = $2';
+       const checkParams = [id, tenantId];
+       if (isAgent) {
+           checkQuery += ' AND user_id = $3';
+           checkParams.push(userId);
+       }
+
+       const dealCheck = await db.query(checkQuery, checkParams);
        if (dealCheck.rowCount === 0) return reply.status(404).send({ error: 'Deal not found' });
 
        const result = await db.query(`
@@ -213,10 +259,9 @@ export async function dealRoutes(app: FastifyInstance) {
          RETURNING id, content, created_at
        `, [id, userId, content]);
 
-       // Retorna já com o nome do usuário para o frontend
        return {
          ...result.rows[0],
-         user_name: request.user?.email // Simplificação: ideal seria pegar o nome do token ou query
+         user_name: request.user?.email 
        };
 
     } catch (error) {

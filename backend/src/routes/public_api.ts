@@ -7,14 +7,14 @@ export async function publicApiRoutes(app: FastifyInstance) {
   // NÃO tem hook de autenticação, pois é pública para cadastro
 
   // --- POST /api/public/register-tenant ---
-  // Cria Empresa + Usuário Admin + Vincula Plano Grátis (ou escolhido)
+  // Cria Empresa + Usuário Admin + Vincula Plano + FUNIL PADRÃO
   app.post('/register-tenant', async (request, reply) => {
     const registerSchema = z.object({
       company_name: z.string().min(2),
       user_name: z.string().min(2),
       email: z.string().email(),
       password: z.string().min(6),
-      plan_id: z.string().uuid().optional(), // Se não vier, pegamos o FREE
+      plan_id: z.string().uuid().optional(),
     });
 
     const data = registerSchema.parse(request.body);
@@ -23,13 +23,13 @@ export async function publicApiRoutes(app: FastifyInstance) {
     try {
       await client.query('BEGIN');
 
-      // 1. Verifica se usuário já existe (email único globalmente para simplificar login)
+      // 1. Verifica duplicidade de usuário
       const userCheck = await client.query('SELECT id FROM users WHERE email = $1', [data.email]);
       if (userCheck.rowCount! > 0) {
         throw new Error('Email already registered');
       }
 
-      // 2. Define o Plano (Se não enviado, busca o mais barato/free)
+      // 2. Define o Plano
       let planId = data.plan_id;
       if (!planId) {
         const planRes = await client.query('SELECT id FROM plans ORDER BY price ASC LIMIT 1');
@@ -41,6 +41,28 @@ export async function publicApiRoutes(app: FastifyInstance) {
         INSERT INTO tenants (name, plan_id, status) VALUES ($1, $2, 'active') RETURNING id
       `, [data.company_name, planId]);
       const tenantId = tenantRes.rows[0].id;
+
+      // --- NOVO: CRIAÇÃO DO FUNIL PADRÃO ---
+      const pipelineRes = await client.query(`
+        INSERT INTO pipelines (tenant_id, name) VALUES ($1, 'Funil de Vendas') RETURNING id
+      `, [tenantId]);
+      const pipelineId = pipelineRes.rows[0].id;
+
+      const defaultStages = [
+        { name: 'Novo Lead', order: 1 },
+        { name: 'Em Contato', order: 2 },
+        { name: 'Proposta Enviada', order: 3 },
+        { name: 'Negociação', order: 4 },
+        { name: 'Fechado (Ganho)', order: 5 },
+        { name: 'Perdido', order: 6 }
+      ];
+
+      for (const stage of defaultStages) {
+        await client.query(`
+            INSERT INTO stages (pipeline_id, name, "order") VALUES ($1, $2, $3)
+        `, [pipelineId, stage.name, stage.order]);
+      }
+      // -------------------------------------
 
       // 4. Cria o Usuário Owner
       const salt = await bcrypt.genSalt(10);

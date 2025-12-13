@@ -6,7 +6,7 @@ import { authenticate } from '../middleware/auth';
 export async function pipelineRoutes(app: FastifyInstance) {
   app.addHook('onRequest', authenticate);
 
-  // --- GET /api/pipelines ---
+  // --- GET /api/pipelines (Listar - Permitido para todos) ---
   app.get('/', async (request, reply) => {
     const tenantId = request.user?.tenantId;
 
@@ -17,7 +17,6 @@ export async function pipelineRoutes(app: FastifyInstance) {
       );
 
       if (pipelinesResult.rowCount === 0) {
-        // Se não existir, retorna array vazio (o front pode tratar ou criar padrão via seed)
         return []; 
       }
 
@@ -37,8 +36,12 @@ export async function pipelineRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- PUT /api/pipelines/stages (Atualizar Ordem/Nome em Lote) ---
+  // --- PUT /api/pipelines/stages (Atualizar Ordem/Nome - Bloqueado para Agent) ---
   app.put('/stages', async (request, reply) => {
+    if (request.user?.role === 'agent') {
+        return reply.status(403).send({ error: 'Vendedores não podem alterar a estrutura do funil.' });
+    }
+
     const updateStagesSchema = z.object({
       stages: z.array(z.object({
         id: z.string().uuid(),
@@ -77,8 +80,12 @@ export async function pipelineRoutes(app: FastifyInstance) {
     }
   });
   
-  // --- POST /api/pipelines/:id/stages (Adicionar Etapa) ---
+  // --- POST /api/pipelines/:id/stages (Adicionar Etapa - Bloqueado para Agent) ---
   app.post('/:id/stages', async (request, reply) => {
+    if (request.user?.role === 'agent') {
+        return reply.status(403).send({ error: 'Permissão negada.' });
+    }
+
     const paramsSchema = z.object({ id: z.string().uuid() });
     const bodySchema = z.object({ name: z.string().min(1) });
     
@@ -105,14 +112,17 @@ export async function pipelineRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- DELETE /api/pipelines/stages/:id (Excluir Etapa) ---
+  // --- DELETE /api/pipelines/stages/:id (Excluir Etapa - Bloqueado para Agent) ---
   app.delete('/stages/:id', async (request, reply) => {
+    if (request.user?.role === 'agent') {
+        return reply.status(403).send({ error: 'Permissão negada.' });
+    }
+
     const paramsSchema = z.object({ id: z.string().uuid() });
     const { id } = paramsSchema.parse(request.params);
     const tenantId = request.user?.tenantId;
 
     try {
-      // Verifica se a etapa pertence a um pipeline do tenant
       const check = await db.query(`
         SELECT s.id 
         FROM stages s
@@ -124,13 +134,11 @@ export async function pipelineRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: 'Stage not found or permission denied' });
       }
 
-      // Tenta excluir
       await db.query('DELETE FROM stages WHERE id = $1', [id]);
 
       return { message: 'Stage deleted' };
 
     } catch (error: any) {
-      // Código 23503 = Violação de Foreign Key (existem deals vinculados)
       if (error.code === '23503') {
         return reply.status(400).send({ 
           error: 'Cannot delete stage containing deals. Move or delete them first.' 

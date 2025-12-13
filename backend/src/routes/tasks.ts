@@ -4,16 +4,14 @@ import { db } from '../db/client';
 import { authenticate } from '../middleware/auth';
 
 export async function taskRoutes(app: FastifyInstance) {
-  // Protege todas as rotas com autenticação JWT
   app.addHook('onRequest', authenticate);
 
-  // --- GET /api/tasks (Listar Minhas Tarefas) ---
+  // --- GET /api/tasks (Listar) ---
   app.get('/', async (request, reply) => {
-    const tenantId = request.user?.tenantId;
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
     
-    // Schema de validação dos filtros da URL (Query Params)
     const querySchema = z.object({
-        // Aceita 'all' para trazer tudo ou um status específico
         status: z.enum(['pending', 'in_progress', 'completed', 'all']).default('pending')
     });
     
@@ -30,16 +28,17 @@ export async function taskRoutes(app: FastifyInstance) {
       `;
       const values: any[] = [tenantId];
 
-      // Se não for 'all', filtra pelo status específico
+      // Filtro de Segurança
+      if (isAgent) {
+          queryText += ` AND t.user_id = $${values.length + 1}`;
+          values.push(userId);
+      }
+
       if (status !== 'all') {
-          queryText += ` AND t.status = $2`;
+          queryText += ` AND t.status = $${values.length + 1}`;
           values.push(status);
       }
 
-      // Ordenação: 
-      // 1. Data de Vencimento (mais urgentes primeiro)
-      // 2. NULLS LAST (tarefas sem data ficam no final)
-      // 3. Data de criação (mais novas primeiro como critério de desempate)
       queryText += ` ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC`;
 
       const result = await db.query(queryText, values);
@@ -51,19 +50,19 @@ export async function taskRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- POST /api/tasks (Criar Tarefa) ---
+  // --- POST /api/tasks (Criar) ---
   app.post('/', async (request, reply) => {
     const createSchema = z.object({
       title: z.string().min(1),
       description: z.string().optional(),
-      due_date: z.string().optional(), // Espera string ISO
+      due_date: z.string().optional(),
       priority: z.enum(['low', 'medium', 'high']).default('medium'),
       contact_id: z.string().uuid().optional(),
     });
 
     const data = createSchema.parse(request.body);
     const tenantId = request.user?.tenantId;
-    const userId = request.user?.userId; // Atribui ao usuário logado
+    const userId = request.user?.userId;
 
     try {
       const result = await db.query(`
@@ -83,46 +82,38 @@ export async function taskRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- PUT /api/tasks/:id (Editar Tarefa Completa) ---
+  // --- PUT /api/tasks/:id (Editar) ---
   app.put('/:id', async (request, reply) => {
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
     const paramsSchema = z.object({ id: z.string().uuid() });
-    
     const updateSchema = z.object({
       title: z.string().min(1),
       description: z.string().optional(),
       due_date: z.string().optional(),
       priority: z.enum(['low', 'medium', 'high']),
       contact_id: z.string().uuid().optional(),
-      // Status também pode vir aqui se quiser, mas temos rota específica abaixo
       status: z.enum(['pending', 'in_progress', 'completed']).optional() 
     });
 
     const { id } = paramsSchema.parse(request.params);
     const data = updateSchema.parse(request.body);
-    const tenantId = request.user?.tenantId;
 
     try {
-      // Montagem dinâmica simples ou update fixo. Faremos fixo para segurança dos campos.
-      // Se o campo status vier, atualizamos, se não, mantém o atual (usando COALESCE ou lógica no SQL seria ideal, 
-      // mas aqui vamos assumir que o front manda os dados atuais se não mudou, ou tratamos null).
-      
-      // Neste caso, vamos atualizar os dados principais. O status geralmente vai via PATCH, 
-      // mas se vier aqui, atualizamos também.
-      
-      const result = await db.query(`
+      let query = `
         UPDATE tasks 
         SET title = $1, description = $2, due_date = $3, priority = $4, contact_id = $5
         WHERE id = $6 AND tenant_id = $7
-        RETURNING *
-      `, [
-        data.title, 
-        data.description || '', 
-        data.due_date || null, 
-        data.priority, 
-        data.contact_id || null, 
-        id, 
-        tenantId
-      ]);
+      `;
+      const params = [data.title, data.description || '', data.due_date || null, data.priority, data.contact_id || null, id, tenantId];
+
+      if (isAgent) {
+          query += ' AND user_id = $8';
+          params.push(userId);
+      }
+      query += ' RETURNING *';
+
+      const result = await db.query(query, params);
 
       if (result.rowCount === 0) return reply.status(404).send({ error: 'Task not found' });
       return result.rows[0];
@@ -133,26 +124,29 @@ export async function taskRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- PATCH /api/tasks/:id/status (Mudar Status - Drag & Drop / Checkbox) ---
+  // --- PATCH /api/tasks/:id/status ---
   app.patch('/:id/status', async (request, reply) => {
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
     const paramsSchema = z.object({ id: z.string().uuid() });
-    
-    // Aceita os 3 estados para suportar o Kanban e a Lista
     const bodySchema = z.object({
         status: z.enum(['pending', 'in_progress', 'completed'])
     });
 
     const { id } = paramsSchema.parse(request.params);
     const { status } = bodySchema.parse(request.body);
-    const tenantId = request.user?.tenantId;
 
     try {
-      const result = await db.query(`
-        UPDATE tasks 
-        SET status = $1
-        WHERE id = $2 AND tenant_id = $3
-        RETURNING id, status
-      `, [status, id, tenantId]);
+      let query = `UPDATE tasks SET status = $1 WHERE id = $2 AND tenant_id = $3`;
+      const params = [status, id, tenantId];
+
+      if (isAgent) {
+          query += ' AND user_id = $4';
+          params.push(userId);
+      }
+      query += ' RETURNING id, status';
+
+      const result = await db.query(query, params);
 
       if (result.rowCount === 0) return reply.status(404).send({ error: 'Task not found' });
       return result.rows[0];
@@ -162,16 +156,26 @@ export async function taskRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- DELETE /api/tasks/:id (Excluir Tarefa) ---
+  // --- DELETE /api/tasks/:id ---
   app.delete('/:id', async (request, reply) => {
+    const { tenantId, role, userId } = request.user!;
+    const isAgent = role === 'agent';
     const paramsSchema = z.object({ id: z.string().uuid() });
     const { id } = paramsSchema.parse(request.params);
-    const tenantId = request.user?.tenantId;
 
     try {
-        const result = await db.query('DELETE FROM tasks WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+        let query = 'DELETE FROM tasks WHERE id = $1 AND tenant_id = $2';
+        const params = [id, tenantId];
+
+        // Vendedor só pode deletar SUAS tarefas
+        if (isAgent) {
+            query += ' AND user_id = $3';
+            params.push(userId);
+        }
+
+        const result = await db.query(query, params);
         
-        if (result.rowCount === 0) return reply.status(404).send({ error: 'Task not found' });
+        if (result.rowCount === 0) return reply.status(404).send({ error: 'Task not found or permission denied' });
         return { message: 'Deleted successfully' };
 
     } catch (error) {

@@ -100,23 +100,48 @@ export async function userRoutes(app: FastifyInstance) {
       });
 
       const data = inviteSchema.parse(request.body);
-      const tenantId = request.user.tenantId;
+      const tenantId = request.user?.tenantId;
 
       try {
-        const checkUser = await db.query('SELECT id FROM users WHERE email = $1', [data.email]);
+        const client = await db.getClient();
+
+        // 1. VERIFICAÇÃO DE LIMITE DO PLANO
+        const limitCheck = await client.query(`
+            SELECT 
+                p.max_users,
+                (SELECT COUNT(*) FROM users WHERE tenant_id = $1) as current_count
+            FROM tenants t
+            LEFT JOIN plans p ON t.plan_id = p.id
+            WHERE t.id = $1
+        `, [tenantId]);
+
+        if (limitCheck.rows.length > 0 && limitCheck.rows[0].max_users !== null) {
+            const { max_users, current_count } = limitCheck.rows[0];
+            if (Number(current_count) >= Number(max_users)) {
+                client.release();
+                return reply.status(403).send({ 
+                    error: `Limite de usuários atingido (${current_count}/${max_users}). Faça upgrade do plano.` 
+                });
+            }
+        }
+
+        // 2. Prossegue com a verificação de email
+        const checkUser = await client.query('SELECT id FROM users WHERE email = $1', [data.email]);
         if (checkUser.rowCount && checkUser.rowCount > 0) {
+            client.release();
             return reply.status(409).send({ error: 'Email already used in the system' });
         }
 
         const salt = await bcrypt.genSalt(10);
         const hash = await bcrypt.hash(data.password, salt);
 
-        const result = await db.query(`
+        const result = await client.query(`
           INSERT INTO users (tenant_id, name, email, password_hash, role)
           VALUES ($1, $2, $3, $4, $5)
           RETURNING id, name, email, role, created_at
         `, [tenantId, data.name, data.email, hash, data.role]);
 
+        client.release();
         return reply.status(201).send(result.rows[0]);
 
       } catch (error) {
@@ -135,11 +160,11 @@ export async function userRoutes(app: FastifyInstance) {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       
       // Impede de se auto-deletar
-      if (id === request.user.userId) {
+      if (id === request.user?.userId) {
         return reply.status(400).send({ error: 'Cannot delete yourself' });
       }
 
-      const tenantId = request.user.tenantId;
+      const tenantId = request.user?.tenantId;
 
       try {
         // Garante que o usuário deletado pertença ao mesmo tenant do admin

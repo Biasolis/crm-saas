@@ -5,15 +5,12 @@ import { authenticate } from '../middleware/auth';
 
 export async function proposalRoutes(app: FastifyInstance) {
   
-  // ==========================================================
   // ROTA PÚBLICA (Sem Login) - Para o Cliente Final
-  // ==========================================================
   app.get('/:id/public', async (request, reply) => {
     const paramsSchema = z.object({ id: z.string().uuid() });
     const { id } = paramsSchema.parse(request.params);
 
     try {
-      // Busca proposta + dados da empresa (Tenant) para o Branding
       const result = await db.query(`
         SELECT 
             p.*,
@@ -34,7 +31,6 @@ export async function proposalRoutes(app: FastifyInstance) {
       
       const proposal = result.rows[0];
 
-      // Busca os itens da proposta
       const itemsRes = await db.query(`
         SELECT * FROM proposal_items WHERE proposal_id = $1
       `, [id]);
@@ -50,18 +46,17 @@ export async function proposalRoutes(app: FastifyInstance) {
     }
   });
 
-  // ==========================================================
-  // ROTAS PROTEGIDAS (Requer Login no Dashboard)
-  // ==========================================================
+  // ROTAS PROTEGIDAS
   app.register(async (protectedRoutes) => {
-    // Aplica o middleware de autenticação apenas neste bloco
     protectedRoutes.addHook('onRequest', authenticate);
 
-    // --- GET /api/proposals (Listar Propostas do Tenant) ---
+    // --- GET /api/proposals (Listar) ---
     protectedRoutes.get('/', async (request, reply) => {
-      const tenantId = request.user?.tenantId;
+      const { tenantId, role, userId } = request.user!;
+      const isAgent = role === 'agent';
+
       try {
-        const result = await db.query(`
+        let query = `
           SELECT 
               p.*,
               c.name as contact_name,
@@ -70,8 +65,17 @@ export async function proposalRoutes(app: FastifyInstance) {
           LEFT JOIN contacts c ON p.contact_id = c.id
           LEFT JOIN deals d ON p.deal_id = d.id
           WHERE p.tenant_id = $1
-          ORDER BY p.created_at DESC
-        `, [tenantId]);
+        `;
+        const params = [tenantId];
+
+        if (isAgent) {
+            query += ' AND p.user_id = $2';
+            params.push(userId);
+        }
+
+        query += ' ORDER BY p.created_at DESC';
+
+        const result = await db.query(query, params);
         return result.rows;
       } catch (error) {
         console.error(error);
@@ -79,7 +83,7 @@ export async function proposalRoutes(app: FastifyInstance) {
       }
     });
 
-    // --- POST /api/proposals (Criar Nova Proposta) ---
+    // --- POST /api/proposals (Criar) ---
     protectedRoutes.post('/', async (request, reply) => {
       const createProposalSchema = z.object({
         title: z.string().min(1),
@@ -97,22 +101,22 @@ export async function proposalRoutes(app: FastifyInstance) {
 
       const data = createProposalSchema.parse(request.body);
       const tenantId = request.user?.tenantId;
+      const userId = request.user?.userId;
 
       const client = await db.getClient();
 
       try {
-        await client.query('BEGIN'); // Inicia Transação
+        await client.query('BEGIN'); 
 
-        // 1. Calcula o Total Geral
         const totalAmount = data.items.reduce((acc, item) => acc + (item.quantity * item.unit_price), 0);
 
-        // 2. Insere a Proposta (Cabeçalho)
         const proposalRes = await client.query(`
-          INSERT INTO proposals (tenant_id, deal_id, contact_id, title, valid_until, notes, total_amount)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          INSERT INTO proposals (tenant_id, user_id, deal_id, contact_id, title, valid_until, notes, total_amount)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           RETURNING id
         `, [
           tenantId, 
+          userId,
           data.deal_id || null, 
           data.contact_id || null, 
           data.title, 
@@ -123,7 +127,6 @@ export async function proposalRoutes(app: FastifyInstance) {
 
         const proposalId = proposalRes.rows[0].id;
 
-        // 3. Insere os Itens
         for (const item of data.items) {
           const itemTotal = item.quantity * item.unit_price;
           await client.query(`
@@ -139,11 +142,11 @@ export async function proposalRoutes(app: FastifyInstance) {
           ]);
         }
 
-        await client.query('COMMIT'); // Salva tudo
+        await client.query('COMMIT'); 
         return reply.status(201).send({ message: 'Proposal created', id: proposalId });
 
       } catch (error) {
-        await client.query('ROLLBACK'); // Desfaz se der erro
+        await client.query('ROLLBACK'); 
         console.error(error);
         return reply.status(500).send({ error: 'Failed to create proposal' });
       } finally {
@@ -151,8 +154,12 @@ export async function proposalRoutes(app: FastifyInstance) {
       }
     });
 
-    // --- DELETE /api/proposals/:id (Excluir Proposta) ---
+    // --- DELETE /api/proposals/:id (Excluir) ---
     protectedRoutes.delete('/:id', async (request, reply) => {
+      if (request.user?.role === 'agent') {
+          return reply.status(403).send({ error: 'Permission denied.' });
+      }
+
       const paramsSchema = z.object({ id: z.string().uuid() });
       const { id } = paramsSchema.parse(request.params);
       const tenantId = request.user?.tenantId;
