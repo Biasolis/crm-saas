@@ -36,10 +36,11 @@ export async function productRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- POST /api/products (Criar - Bloqueado para Agente) ---
+  // --- POST /api/products (Criar - BLOQUEADO PARA AGENT) ---
   app.post('/', async (request, reply) => {
+    // TRAVA DE SEGURANÇA
     if (request.user?.role === 'agent') {
-        return reply.status(403).send({ error: 'Permission denied. Agents cannot create products.' });
+        return reply.status(403).send({ error: 'Permissão negada. Vendedores não podem criar produtos.' });
     }
 
     const createProductSchema = z.object({
@@ -66,10 +67,11 @@ export async function productRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- PUT /api/products/:id (Editar - Bloqueado para Agente) ---
+  // --- PUT /api/products/:id (Editar - BLOQUEADO PARA AGENT) ---
   app.put('/:id', async (request, reply) => {
+    // TRAVA DE SEGURANÇA
     if (request.user?.role === 'agent') {
-        return reply.status(403).send({ error: 'Permission denied.' });
+        return reply.status(403).send({ error: 'Permissão negada. Vendedores não podem editar produtos.' });
     }
 
     const paramsSchema = z.object({ id: z.string().uuid() });
@@ -100,10 +102,11 @@ export async function productRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- DELETE /api/products/:id (Arquivar/Excluir - Bloqueado para Agente) ---
+  // --- DELETE /api/products/:id (Arquivar/Excluir - BLOQUEADO PARA AGENT) ---
   app.delete('/:id', async (request, reply) => {
+    // TRAVA DE SEGURANÇA
     if (request.user?.role === 'agent') {
-        return reply.status(403).send({ error: 'Permission denied.' });
+        return reply.status(403).send({ error: 'Permissão negada. Vendedores não podem excluir produtos.' });
     }
 
     const paramsSchema = z.object({ id: z.string().uuid() });
