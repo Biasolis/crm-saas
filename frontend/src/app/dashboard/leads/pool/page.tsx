@@ -1,18 +1,26 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useAuth } from '@/hooks/useAuth'; // Ajuste o import conforme seu hook
+import { useAuth } from '@/hooks/useAuth'; // Ajuste se seu hook estiver em outro lugar
 import { leadsService } from '@/services/leads';
 import { Lead } from '@/types';
 import { Plus, Download, UserPlus } from 'lucide-react';
-import styles from './pool.module.css'; // Importando o CSS Module
+import styles from './pool.module.css';
+
+// Importando os Modais
+import NewLeadModal from '@/components/leads/NewLeadModal';
+import ImportCSVModal from '@/components/leads/ImportCSVModal';
 
 export default function LeadPoolPage() {
   const { user } = useAuth();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Verificação simples de permissão (ajuste conforme seu AuthContext)
+  // Estados para controlar a abertura dos modais
+  const [isNewLeadOpen, setIsNewLeadOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+
+  // Verifica se é Admin ou Dono para mostrar os botões de upload
   const isAdmin = user?.role === 'admin' || user?.role === 'owner';
 
   const fetchLeads = async () => {
@@ -21,7 +29,7 @@ export default function LeadPoolPage() {
       const data = await leadsService.getPool();
       setLeads(data);
     } catch (error) {
-      console.error('Erro ao buscar piscina de leads', error);
+      console.error('Erro ao buscar leads da piscina:', error);
     } finally {
       setLoading(false);
     }
@@ -32,17 +40,16 @@ export default function LeadPoolPage() {
   }, []);
 
   const handleClaim = async (leadId: string) => {
-    // Feedback otimista ou loading local poderia ser adicionado aqui
     if (!confirm('Deseja assumir o atendimento deste lead?')) return;
 
     try {
       await leadsService.claim(leadId);
-      // Remove da lista localmente para dar feedback instantâneo
+      // Remove da lista visualmente para feedback imediato
       setLeads((prev) => prev.filter((l) => l.id !== leadId));
-      alert('Lead capturado com sucesso! Verifique a aba "Meus Leads".');
+      alert('Lead capturado! Ele agora está na sua aba "Meus Leads".');
     } catch (error) {
-      alert('Erro: Este lead pode já ter sido pego por outro vendedor.');
-      fetchLeads(); // Recarrega para garantir consistência
+      alert('Ops! Este lead já foi pego ou não está mais disponível.');
+      fetchLeads(); // Atualiza a lista para garantir
     }
   };
 
@@ -54,17 +61,18 @@ export default function LeadPoolPage() {
           <p>Leads aguardando atendimento. Seja rápido!</p>
         </div>
         
+        {/* Botões visíveis apenas para Administradores */}
         {isAdmin && (
           <div className={styles.actions}>
             <button 
               className={styles.btnSecondary}
-              onClick={() => alert('Implementar Modal de Importação CSV')}
+              onClick={() => setIsImportOpen(true)}
             >
               <Download size={16} /> Importar CSV
             </button>
             <button 
               className={styles.btnPrimary}
-              onClick={() => alert('Implementar Modal de Novo Lead')}
+              onClick={() => setIsNewLeadOpen(true)}
             >
               <Plus size={16} /> Novo Lead
             </button>
@@ -73,7 +81,7 @@ export default function LeadPoolPage() {
       </div>
 
       {loading ? (
-        <p>Carregando leads...</p>
+        <div className="p-8 text-center text-gray-500">Carregando leads disponíveis...</div>
       ) : leads.length === 0 ? (
         <div className={styles.emptyState}>
           <h3>A piscina está vazia! 🏊‍♂️</h3>
@@ -98,7 +106,7 @@ export default function LeadPoolPage() {
                       {lead.company_name || 'Particular'}
                     </span>
                     <span className={styles.position}>
-                      {lead.position || 'Cargo não informado'}
+                      {lead.position || 'Cargo não inf.'}
                     </span>
                   </td>
                   <td>
@@ -123,6 +131,23 @@ export default function LeadPoolPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Renderização dos Modais */}
+      {isAdmin && (
+        <>
+          <NewLeadModal 
+            isOpen={isNewLeadOpen} 
+            onClose={() => setIsNewLeadOpen(false)} 
+            onSuccess={fetchLeads} 
+          />
+          
+          <ImportCSVModal 
+            isOpen={isImportOpen} 
+            onClose={() => setIsImportOpen(false)} 
+            onSuccess={fetchLeads} 
+          />
+        </>
       )}
     </div>
   );
