@@ -18,9 +18,11 @@ export default function LeadPoolPage() {
   const [isNewLeadOpen, setIsNewLeadOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
 
-  // --- CORREÇÃO AQUI ---
-  // Agora aceita Admin, Dono OU Super Admin
-  const isAdmin = user?.role === 'admin' || user?.role === 'owner' || user?.is_super_admin;
+  // Lógica de Permissão Corrigida
+  const isAdmin = 
+    user?.role === 'admin' || 
+    user?.role === 'owner' || 
+    user?.is_super_admin === true;
 
   const fetchLeads = async () => {
     try {
@@ -40,11 +42,10 @@ export default function LeadPoolPage() {
 
   const handleClaim = async (leadId: string) => {
     if (!confirm('Deseja assumir o atendimento deste lead?')) return;
-
     try {
       await leadsService.claim(leadId);
       setLeads((prev) => prev.filter((l) => l.id !== leadId));
-      alert('Lead capturado! Veja na aba "Meus Leads".');
+      alert('Lead capturado! Veja em "Meus Leads".');
     } catch (error) {
       alert('Ops! Lead indisponível.');
       fetchLeads();
@@ -59,7 +60,6 @@ export default function LeadPoolPage() {
           <p>Leads aguardando atendimento. Seja rápido!</p>
         </div>
         
-        {/* Renderiza botões se for Admin/Owner/SuperAdmin */}
         {isAdmin && (
           <div className={styles.actions}>
             <button 
@@ -79,7 +79,7 @@ export default function LeadPoolPage() {
       </div>
 
       {loading ? (
-        <div className="p-8 text-center text-gray-500">Carregando piscina...</div>
+        <div className="p-8 text-center text-gray-500">Carregando leads disponíveis...</div>
       ) : leads.length === 0 ? (
         <div className={styles.emptyState}>
           <h3>A piscina está vazia! 🏊‍♂️</h3>
@@ -120,7 +120,6 @@ export default function LeadPoolPage() {
         </div>
       )}
 
-      {/* Modais só são renderizados se tiver permissão */}
       {isAdmin && (
         <>
           <NewLeadModal 
