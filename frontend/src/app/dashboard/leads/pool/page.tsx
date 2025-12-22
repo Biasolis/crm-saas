@@ -11,18 +11,13 @@ import NewLeadModal from '@/components/leads/NewLeadModal';
 import ImportCSVModal from '@/components/leads/ImportCSVModal';
 
 export default function LeadPoolPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Estados dos Modais
   const [isNewLeadOpen, setIsNewLeadOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
-
-  // Lógica de Permissão Corrigida
-  const isAdmin = 
-    user?.role === 'admin' || 
-    user?.role === 'owner' || 
-    user?.is_super_admin === true;
 
   const fetchLeads = async () => {
     try {
@@ -37,8 +32,11 @@ export default function LeadPoolPage() {
   };
 
   useEffect(() => {
-    fetchLeads();
-  }, []);
+    // Só busca os leads se o usuário já estiver carregado
+    if (!authLoading) {
+        fetchLeads();
+    }
+  }, [authLoading]);
 
   const handleClaim = async (leadId: string) => {
     if (!confirm('Deseja assumir o atendimento deste lead?')) return;
@@ -52,6 +50,10 @@ export default function LeadPoolPage() {
     }
   };
 
+  if (authLoading) {
+    return <div className="p-8 text-center text-gray-500">Carregando...</div>;
+  }
+
   return (
     <div className={styles.container}>
       <div className={styles.header}>
@@ -60,22 +62,21 @@ export default function LeadPoolPage() {
           <p>Leads aguardando atendimento. Seja rápido!</p>
         </div>
         
-        {isAdmin && (
-          <div className={styles.actions}>
-            <button 
-              className={styles.btnSecondary}
-              onClick={() => setIsImportOpen(true)}
-            >
-              <Download size={16} /> Importar CSV
-            </button>
-            <button 
-              className={styles.btnPrimary}
-              onClick={() => setIsNewLeadOpen(true)}
-            >
-              <Plus size={16} /> Novo Lead
-            </button>
-          </div>
-        )}
+        {/* Botões visíveis para TODOS os usuários */}
+        <div className={styles.actions}>
+          <button 
+            className={styles.btnSecondary}
+            onClick={() => setIsImportOpen(true)}
+          >
+            <Download size={16} /> Importar CSV
+          </button>
+          <button 
+            className={styles.btnPrimary}
+            onClick={() => setIsNewLeadOpen(true)}
+          >
+            <Plus size={16} /> Novo Lead
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -83,7 +84,7 @@ export default function LeadPoolPage() {
       ) : leads.length === 0 ? (
         <div className={styles.emptyState}>
           <h3>A piscina está vazia! 🏊‍♂️</h3>
-          <p>Aguarde novos leads.</p>
+          <p>Seja o primeiro a importar leads.</p>
         </div>
       ) : (
         <div className={styles.tableContainer}>
@@ -120,20 +121,17 @@ export default function LeadPoolPage() {
         </div>
       )}
 
-      {isAdmin && (
-        <>
-          <NewLeadModal 
-            isOpen={isNewLeadOpen} 
-            onClose={() => setIsNewLeadOpen(false)} 
-            onSuccess={fetchLeads} 
-          />
-          <ImportCSVModal 
-            isOpen={isImportOpen} 
-            onClose={() => setIsImportOpen(false)} 
-            onSuccess={fetchLeads} 
-          />
-        </>
-      )}
+      {/* Modais disponíveis para todos */}
+      <NewLeadModal 
+        isOpen={isNewLeadOpen} 
+        onClose={() => setIsNewLeadOpen(false)} 
+        onSuccess={fetchLeads} 
+      />
+      <ImportCSVModal 
+        isOpen={isImportOpen} 
+        onClose={() => setIsImportOpen(false)} 
+        onSuccess={fetchLeads} 
+      />
     </div>
   );
 }
