@@ -1,4 +1,4 @@
-import { api } from './api'; 
+import api from './api'; // <--- CORREÇÃO: Importação padrão (sem chaves)
 import { Lead, CreateLeadData } from '@/types';
 
 export const leadsService = {
@@ -46,5 +46,10 @@ export const leadsService = {
 
   lose: async (id: string, reason: string): Promise<void> => {
     await api.post(`/leads/${id}/lose`, { reason });
+  },
+  
+  // Apenas para Admin deletar se precisar limpar
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/leads/${id}`);
   }
 };

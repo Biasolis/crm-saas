@@ -13,6 +13,10 @@ export interface Lead {
   notes?: string | null;
   user_id?: string | null;
   created_at: string;
+  // Campos adicionados para o histórico (Perdidos/Convertidos)
+  loss_reason?: string | null;
+  converted_at?: string | null;
+  updated_at?: string;
 }
 
 export interface CreateLeadData {
