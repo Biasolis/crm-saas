@@ -12,18 +12,19 @@ export async function taskRoutes(app: FastifyInstance) {
     const isAgent = role === 'agent';
     
     const querySchema = z.object({
-        status: z.enum(['pending', 'in_progress', 'completed', 'all']).default('pending')
+        status: z.enum(['pending', 'in_progress', 'completed', 'all']).default('pending'),
+        lead_id: z.string().uuid().optional(),
+        contact_id: z.string().uuid().optional()
     });
     
-    const { status } = querySchema.parse(request.query);
+    const { status, lead_id, contact_id } = querySchema.parse(request.query);
 
     try {
       let queryText = `
-        SELECT 
-            t.*,
-            c.name as contact_name
+        SELECT t.*, c.name as contact_name, l.name as lead_name
         FROM tasks t
         LEFT JOIN contacts c ON t.contact_id = c.id
+        LEFT JOIN leads l ON t.lead_id = l.id
         WHERE t.tenant_id = $1
       `;
       const values: any[] = [tenantId];
@@ -37,6 +38,16 @@ export async function taskRoutes(app: FastifyInstance) {
       if (status !== 'all') {
           queryText += ` AND t.status = $${values.length + 1}`;
           values.push(status);
+      }
+
+      if (lead_id) {
+          queryText += ` AND t.lead_id = $${values.length + 1}`;
+          values.push(lead_id);
+      }
+
+      if (contact_id) {
+          queryText += ` AND t.contact_id = $${values.length + 1}`;
+          values.push(contact_id);
       }
 
       queryText += ` ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC`;
@@ -58,6 +69,7 @@ export async function taskRoutes(app: FastifyInstance) {
       due_date: z.string().optional(),
       priority: z.enum(['low', 'medium', 'high']).default('medium'),
       contact_id: z.string().uuid().optional(),
+      lead_id: z.string().uuid().optional(),
     });
 
     const data = createSchema.parse(request.body);
@@ -66,13 +78,22 @@ export async function taskRoutes(app: FastifyInstance) {
 
     try {
       const result = await db.query(`
-        INSERT INTO tasks (tenant_id, user_id, title, description, due_date, priority, contact_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO tasks (tenant_id, user_id, title, description, due_date, priority, contact_id, lead_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
       `, [
         tenantId, userId, data.title, data.description || '', 
-        data.due_date || null, data.priority, data.contact_id || null
+        data.due_date || null, data.priority, 
+        data.contact_id || null, data.lead_id || null
       ]);
+
+      // Log automático se for vinculada a um lead
+      if (data.lead_id) {
+        await db.query(`
+            INSERT INTO lead_logs (lead_id, user_id, action, details)
+            VALUES ($1, $2, 'task_created', $3)
+        `, [data.lead_id, userId, JSON.stringify({ title: data.title })]);
+      }
 
       return reply.status(201).send(result.rows[0]);
 
@@ -93,6 +114,7 @@ export async function taskRoutes(app: FastifyInstance) {
       due_date: z.string().optional(),
       priority: z.enum(['low', 'medium', 'high']),
       contact_id: z.string().uuid().optional(),
+      lead_id: z.string().uuid().optional(),
       status: z.enum(['pending', 'in_progress', 'completed']).optional() 
     });
 
@@ -102,13 +124,17 @@ export async function taskRoutes(app: FastifyInstance) {
     try {
       let query = `
         UPDATE tasks 
-        SET title = $1, description = $2, due_date = $3, priority = $4, contact_id = $5
-        WHERE id = $6 AND tenant_id = $7
+        SET title = $1, description = $2, due_date = $3, priority = $4, contact_id = $5, lead_id = $6
+        WHERE id = $7 AND tenant_id = $8
       `;
-      const params = [data.title, data.description || '', data.due_date || null, data.priority, data.contact_id || null, id, tenantId];
+      const params = [
+        data.title, data.description || '', data.due_date || null, 
+        data.priority, data.contact_id || null, data.lead_id || null, 
+        id, tenantId
+      ];
 
       if (isAgent) {
-          query += ' AND user_id = $8';
+          query += ' AND user_id = $9';
           params.push(userId);
       }
       query += ' RETURNING *';

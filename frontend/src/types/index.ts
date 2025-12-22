@@ -13,10 +13,31 @@ export interface Lead {
   notes?: string | null;
   user_id?: string | null;
   created_at: string;
-  // Campos adicionados para o histórico (Perdidos/Convertidos)
+  // Campos novos
   loss_reason?: string | null;
   converted_at?: string | null;
   updated_at?: string;
+}
+
+export interface LeadLog {
+  id: string;
+  lead_id: string;
+  user_id?: string;
+  user_name?: string; // Vem do join
+  action: 'created' | 'claimed' | 'status_change' | 'note' | 'task_created' | 'lost' | 'converted';
+  details?: any;
+  created_at: string;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  due_date?: string;
+  priority: 'low' | 'medium' | 'high';
+  status: 'pending' | 'in_progress' | 'completed';
+  contact_id?: string;
+  lead_id?: string; // Novo
 }
 
 export interface CreateLeadData {

@@ -4,10 +4,12 @@ import { useEffect, useState } from 'react';
 import { leadsService } from '@/services/leads';
 import { Lead } from '@/types';
 import { CheckCircle, XCircle, Phone, Mail, MapPin, Globe } from 'lucide-react';
-import styles from './mine.module.css'; // CSS Modules
+import styles from './mine.module.css';
+import LeadDetailsModal from '@/components/leads/LeadDetailsModal';
 
 export default function MyLeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   
   const fetchMyLeads = async () => {
     try {
@@ -22,7 +24,8 @@ export default function MyLeadsPage() {
     fetchMyLeads();
   }, []);
 
-  const handleConvert = async (id: string) => {
+  const handleConvert = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation(); // Evita abrir o modal ao clicar no botão
     if (!confirm('Confirmar conversão em cliente? Isso criará registros em Contatos e Empresas.')) return;
     try {
       await leadsService.convert(id);
@@ -33,7 +36,8 @@ export default function MyLeadsPage() {
     }
   };
 
-  const handleLost = async (id: string) => {
+  const handleLost = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation(); // Evita abrir o modal ao clicar no botão
     const reason = prompt('Qual o motivo da perda?');
     if (!reason) return;
     
@@ -51,7 +55,13 @@ export default function MyLeadsPage() {
       
       <div className={styles.grid}>
         {leads.map((lead) => (
-          <div key={lead.id} className={styles.card}>
+          <div 
+             key={lead.id} 
+             className={styles.card} 
+             onClick={() => setSelectedLead(lead)}
+             style={{ cursor: 'pointer' }}
+             title="Clique para ver detalhes e tarefas"
+          >
             <div>
               <div className={styles.cardHeader}>
                 <h3 className={styles.cardTitle}>{lead.name}</h3>
@@ -91,13 +101,13 @@ export default function MyLeadsPage() {
             <div className={styles.cardActions}>
                <button 
                  className={styles.btnLost}
-                 onClick={() => handleLost(lead.id)}
+                 onClick={(e) => handleLost(e, lead.id)}
                >
                  <XCircle size={16} /> Perder
                </button>
                <button 
                  className={styles.btnConvert}
-                 onClick={() => handleConvert(lead.id)}
+                 onClick={(e) => handleConvert(e, lead.id)}
                >
                  <CheckCircle size={16} /> Converter
                </button>
@@ -111,6 +121,12 @@ export default function MyLeadsPage() {
           </p>
         )}
       </div>
+
+      <LeadDetailsModal 
+        isOpen={!!selectedLead} 
+        lead={selectedLead} 
+        onClose={() => setSelectedLead(null)} 
+      />
     </div>
   );
 }

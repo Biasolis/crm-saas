@@ -1,5 +1,5 @@
-import api from './api'; // <--- CORREÇÃO: Importação padrão (sem chaves)
-import { Lead, CreateLeadData } from '@/types';
+import api from './api'; // <--- CORREÇÃO: Sem chaves { } pois é export default
+import { Lead, CreateLeadData, LeadLog } from '@/types';
 
 export const leadsService = {
   // --- Listagens ---
@@ -23,19 +23,23 @@ export const leadsService = {
     return data;
   },
 
+  // Busca logs (histórico)
+  getLogs: async (id: string): Promise<LeadLog[]> => {
+    const { data } = await api.get(`/leads/${id}/logs`);
+    return data;
+  },
+
   // --- Ações ---
   create: async (payload: CreateLeadData): Promise<Lead> => {
     const { data } = await api.post('/leads', payload);
     return data;
   },
 
-  // Importar CSV (envia array de leads)
   importCSV: async (leads: any[]): Promise<{ count: number }> => {
     const { data } = await api.post('/leads/import', { leads });
     return data;
   },
 
-  // Ação Atômica: Pegar Lead
   claim: async (id: string): Promise<void> => {
     await api.post(`/leads/${id}/claim`);
   },
@@ -48,7 +52,6 @@ export const leadsService = {
     await api.post(`/leads/${id}/lose`, { reason });
   },
   
-  // Apenas para Admin deletar se precisar limpar
   delete: async (id: string): Promise<void> => {
     await api.delete(`/leads/${id}`);
   }

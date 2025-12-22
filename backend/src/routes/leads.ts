@@ -11,8 +11,7 @@ export async function leadRoutes(app: FastifyInstance) {
   // 1. LISTAGEM E FILTROS (AS 4 TELAS)
   // ===========================================================================
   
-  // GET /api/leads/pool -> "Leads Gerais" (Piscina)
-  // Mostra leads SEM dono (user_id IS NULL) e com status 'new'
+  // GET /api/leads/pool
   app.get('/pool', async (request, reply) => {
     const { tenantId } = request.user!;
     try {
@@ -29,8 +28,7 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // GET /api/leads/mine -> "Meus Leads" (Pipeline)
-  // Mostra leads que o usuário "pegou" (status 'in_progress')
+  // GET /api/leads/mine
   app.get('/mine', async (request, reply) => {
     const { tenantId, userId } = request.user!;
     try {
@@ -47,33 +45,25 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // GET /api/leads/converted -> "Leads Convertidos"
+  // GET /api/leads/converted
   app.get('/converted', async (request, reply) => {
-    const { tenantId, role, userId } = request.user!;
+    const { tenantId } = request.user!;
     try {
-      let query = `SELECT * FROM leads WHERE tenant_id = $1 AND status = 'converted'`;
-      const params: any[] = [tenantId];
-
-      // Se quiser que vendedores vejam APENAS os convertidos por eles, descomente:
-      /*
-      if (role === 'agent') {
-        query += ` AND user_id = $2`;
-        params.push(userId);
-      }
-      */
-      
-      query += ` ORDER BY converted_at DESC`;
-      const result = await db.query(query, params);
+      const query = `
+        SELECT * FROM leads 
+        WHERE tenant_id = $1 AND status = 'converted'
+        ORDER BY converted_at DESC
+      `;
+      const result = await db.query(query, [tenantId]);
       return result.rows;
     } catch (error) {
       return reply.status(500).send({ error: 'Failed to fetch converted leads' });
     }
   });
 
-  // GET /api/leads/lost -> "Leads Perdidos"
+  // GET /api/leads/lost
   app.get('/lost', async (request, reply) => {
     const { tenantId } = request.user!;
-    // Admin geralmente quer ver todos os perdidos para análise
     try {
       const result = await db.query(`
         SELECT * FROM leads 
@@ -83,6 +73,29 @@ export async function leadRoutes(app: FastifyInstance) {
       return result.rows;
     } catch (error) {
       return reply.status(500).send({ error: 'Failed to fetch lost leads' });
+    }
+  });
+
+  // GET /api/leads/:id/logs (Histórico)
+  app.get('/:id/logs', async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { tenantId } = request.user!;
+    
+    // Verificação de segurança básica: O lead deve pertencer ao tenant
+    const check = await db.query('SELECT id FROM leads WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+    if (check.rowCount === 0) return reply.status(404).send({ error: 'Lead not found' });
+
+    try {
+        const result = await db.query(`
+            SELECT l.*, u.name as user_name 
+            FROM lead_logs l
+            LEFT JOIN users u ON l.user_id = u.id
+            WHERE l.lead_id = $1
+            ORDER BY l.created_at DESC
+        `, [id]);
+        return result.rows;
+    } catch (error) {
+        return reply.status(500).send({ error: 'Failed to fetch logs' });
     }
   });
 
@@ -96,7 +109,7 @@ export async function leadRoutes(app: FastifyInstance) {
     const { tenantId, userId } = request.user!;
 
     try {
-      // Tenta atualizar SOMENTE SE user_id for NULL (Atomicidade)
+      // Tenta atualizar SOMENTE SE user_id for NULL
       const result = await db.query(`
         UPDATE leads 
         SET user_id = $1, status = 'in_progress', captured_at = NOW()
@@ -105,9 +118,11 @@ export async function leadRoutes(app: FastifyInstance) {
       `, [userId, id, tenantId]);
 
       if (result.rowCount === 0) {
-        // Se não atualizou, ou não existe ou alguém pegou 1ms antes
-        return reply.status(409).send({ error: 'Este lead já foi pego por outro vendedor ou não está disponível.' });
+        return reply.status(409).send({ error: 'Este lead já foi pego ou não está disponível.' });
       }
+
+      // LOG
+      await db.query(`INSERT INTO lead_logs (lead_id, user_id, action) VALUES ($1, $2, 'claimed')`, [id, userId]);
 
       return { message: 'Lead capturado com sucesso!', lead: result.rows[0] };
     } catch (error) {
@@ -131,7 +146,6 @@ export async function leadRoutes(app: FastifyInstance) {
       `;
       const params: any[] = [reason, id, tenantId];
 
-      // Vendedor só pode marcar como perdido o SEU lead
       if (role === 'agent') {
         query += ` AND user_id = $4`;
         params.push(userId);
@@ -140,13 +154,20 @@ export async function leadRoutes(app: FastifyInstance) {
       const result = await db.query(query, params);
       
       if (result.rowCount === 0) return reply.status(404).send({ error: 'Lead not found or permission denied' });
+      
+      // LOG
+      await db.query(`
+        INSERT INTO lead_logs (lead_id, user_id, action, details) 
+        VALUES ($1, $2, 'lost', $3)
+      `, [id, userId, JSON.stringify({ reason })]);
+
       return { message: 'Lead marked as lost' };
     } catch (error) {
       return reply.status(500).send({ error: 'Failed to update lead' });
     }
   });
 
-  // POST /api/leads/:id/convert -> Converter em Cliente (Mantido e Ajustado)
+  // POST /api/leads/:id/convert -> Converter em Cliente
   app.post('/:id/convert', async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { tenantId, userId, role } = request.user!;
@@ -155,7 +176,6 @@ export async function leadRoutes(app: FastifyInstance) {
     try {
       await client.query('BEGIN');
 
-      // Busca Lead
       let leadQuery = 'SELECT * FROM leads WHERE id = $1 AND tenant_id = $2';
       const params: any[] = [id, tenantId];
       if (role === 'agent') {
@@ -169,7 +189,6 @@ export async function leadRoutes(app: FastifyInstance) {
 
       if (lead.status === 'converted') throw new Error('Lead already converted');
 
-      // 1. Criar Empresa (se houver nome)
       let companyId = null;
       if (lead.company_name) {
         const compRes = await client.query(`
@@ -179,19 +198,23 @@ export async function leadRoutes(app: FastifyInstance) {
         companyId = compRes.rows[0].id;
       }
 
-      // 2. Criar Contato
       const contactRes = await client.query(`
         INSERT INTO contacts (tenant_id, user_id, name, email, phone, mobile, company_id, address)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id
       `, [tenantId, userId, lead.name, lead.email, lead.phone, lead.mobile, companyId, lead.address]);
 
-      // 3. Atualizar Status do Lead
       await client.query(`
         UPDATE leads 
         SET status = 'converted', converted_at = NOW() 
         WHERE id = $1
       `, [id]);
+
+      // LOG
+      await client.query(`
+         INSERT INTO lead_logs (lead_id, user_id, action, details) 
+         VALUES ($1, $2, 'converted', $3)
+      `, [id, userId, JSON.stringify({ contact_id: contactRes.rows[0].id })]);
 
       await client.query('COMMIT');
       
@@ -214,9 +237,8 @@ export async function leadRoutes(app: FastifyInstance) {
   // 3. CRIAÇÃO E IMPORTAÇÃO (APENAS ADMIN/OWNER)
   // ===========================================================================
 
-  // POST /api/leads (Criar Manualmente)
+  // POST /api/leads
   app.post('/', async (request, reply) => {
-    // BLOQUEIO: Vendedor não cria lead
     if (request.user?.role === 'agent') {
         return reply.status(403).send({ error: 'Apenas administradores podem cadastrar leads.' });
     }
@@ -225,11 +247,11 @@ export async function leadRoutes(app: FastifyInstance) {
       name: z.string().min(2),
       email: z.string().email().optional().or(z.literal('')),
       phone: z.string().optional(),
-      mobile: z.string().optional(),       // Novo
+      mobile: z.string().optional(),
       company_name: z.string().optional(),
-      position: z.string().optional(),     // Novo
-      website: z.string().optional(),      // Novo
-      address: z.string().optional(),      // Novo
+      position: z.string().optional(),
+      website: z.string().optional(),
+      address: z.string().optional(),
       source: z.string().optional(),
       notes: z.string().optional(),
     });
@@ -238,7 +260,6 @@ export async function leadRoutes(app: FastifyInstance) {
     const { tenantId } = request.user!;
 
     try {
-      // Cria com user_id NULL (Piscina) e status 'new'
       const result = await db.query(`
         INSERT INTO leads (
             tenant_id, user_id, status, 
@@ -260,9 +281,8 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // POST /api/leads/import (Importar CSV)
+  // POST /api/leads/import
   app.post('/import', async (request, reply) => {
-    // BLOQUEIO: Vendedor não importa lead
     if (request.user?.role === 'agent') {
         return reply.status(403).send({ error: 'Apenas administradores podem importar leads.' });
     }
@@ -295,7 +315,6 @@ export async function leadRoutes(app: FastifyInstance) {
             if (check.rowCount && check.rowCount > 0) continue; 
         }
 
-        // Insere na Piscina (user_id = NULL)
         await client.query(`
           INSERT INTO leads (
             tenant_id, user_id, status,
@@ -333,12 +352,11 @@ export async function leadRoutes(app: FastifyInstance) {
   // 4. EDIÇÃO E REMOÇÃO
   // ===========================================================================
 
-  // PUT /api/leads/:id (Editar)
+  // PUT /api/leads/:id
   app.put('/:id', async (request, reply) => {
     const { tenantId, role, userId } = request.user!;
     const paramsSchema = z.object({ id: z.string().uuid() });
     
-    // Schema atualizado com novos campos
     const updateSchema = z.object({
       name: z.string().optional(),
       email: z.string().optional(),
@@ -372,7 +390,6 @@ export async function leadRoutes(app: FastifyInstance) {
       values.push(id, tenantId);
       let query = `UPDATE leads SET ${fields.join(', ')} WHERE id = $${idx} AND tenant_id = $${idx+1}`;
 
-      // Segurança: Agente só edita o seu lead (que ele já pegou)
       if (role === 'agent') {
           values.push(userId);
           query += ` AND user_id = $${idx+2}`;
@@ -390,7 +407,7 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // DELETE /api/leads/:id (Admin only)
+  // DELETE /api/leads/:id
   app.delete('/:id', async (request, reply) => {
       if (request.user?.role === 'agent') {
           return reply.status(403).send({ error: 'Vendedores não podem excluir leads.' });
