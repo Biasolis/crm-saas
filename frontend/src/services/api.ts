@@ -17,4 +17,5 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// A exportação DEVE ser default
 export default api;
