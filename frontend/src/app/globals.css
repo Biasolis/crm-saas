@@ -1,0 +1,42 @@
+:root {
+  /* Paleta de Cores (Design System) */
+  --background: #f4f6f8;
+  --surface: #ffffff;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --border: #e5e7eb;
+
+  /* Branding Padrão (Fallback) */
+  --primary: #2563eb;
+  
+  /* A mágica acontece aqui: O hover é sempre 10% mais escuro que a primária */
+  --primary-hover: color-mix(in srgb, var(--primary), black 10%); 
+  --on-primary: #ffffff;
+
+  /* Feedback */
+  --error: #ef4444;
+  --error-bg: #fef2f2;
+  --success: #22c55e;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--background);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button, input {
+  font-family: inherit;
+}

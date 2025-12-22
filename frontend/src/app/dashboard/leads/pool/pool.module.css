@@ -1,0 +1,133 @@
+.container {
+  padding: 2rem;
+  background-color: #f8f9fa;
+  min-height: 100vh;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+}
+
+.title h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin-bottom: 0.5rem;
+}
+
+.title p {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.actions {
+  display: flex;
+  gap: 1rem;
+}
+
+.btnPrimary, .btnSecondary, .btnClaim {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background 0.2s;
+}
+
+.btnPrimary {
+  background-color: #2563eb; /* Azul */
+  color: white;
+}
+
+.btnPrimary:hover { background-color: #1d4ed8; }
+
+.btnSecondary {
+  background-color: #059669; /* Verde */
+  color: white;
+}
+
+.btnSecondary:hover { background-color: #047857; }
+
+/* Tabela */
+.tableContainer {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  overflow: hidden;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  background-color: #f9fafb;
+  text-align: left;
+  padding: 0.75rem 1.5rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: #6b7280;
+  font-weight: 600;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.table td {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #f3f4f6;
+  vertical-align: top;
+}
+
+.companyName {
+  font-weight: 600;
+  color: #111827;
+  display: block;
+}
+
+.position {
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.leadName {
+  color: #374151;
+  display: block;
+}
+
+.leadEmail {
+  font-size: 0.85rem;
+  color: #9ca3af;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background-color: #f3f4f6;
+  color: #374151;
+}
+
+.btnClaim {
+  background-color: #2563eb;
+  color: white;
+  padding: 0.4rem 0.8rem;
+}
+.btnClaim:hover { background-color: #1d4ed8; }
+
+.emptyState {
+  text-align: center;
+  padding: 4rem 2rem;
+  color: #6b7280;
+  border: 2px dashed #e5e7eb;
+  border-radius: 8px;
+  margin-top: 1rem;
+}
