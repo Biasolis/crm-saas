@@ -2,7 +2,7 @@ import axios from 'axios';
 import Cookies from 'js-cookie';
 
 const api = axios.create({
-  // Se rodando no navegador, localhost:3000 é onde o backend está exposto
+  // --- APONTA PARA 3000 (Backend) ---
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000',
   headers: {
     'Content-Type': 'application/json',
@@ -17,5 +17,4 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// A exportação DEVE ser default
 export default api;

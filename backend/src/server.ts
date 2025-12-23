@@ -20,7 +20,7 @@ import { webhookRoutes } from './routes/webhooks';
 import { analyticsRoutes } from './routes/analytics';
 import { adminRoutes } from './routes/admin';
 import { publicApiRoutes } from './routes/public_api';
-import { notificationRoutes } from './routes/notifications'; // <--- NOVA IMPORTAÇÃO
+import { notificationRoutes } from './routes/notifications'; 
 
 dotenv.config();
 
@@ -60,11 +60,12 @@ server.register(webhookRoutes, { prefix: '/api/webhooks' });
 server.register(analyticsRoutes, { prefix: '/api/analytics' });
 server.register(adminRoutes, { prefix: '/api/admin' });
 server.register(publicApiRoutes, { prefix: '/api/public' });
-server.register(notificationRoutes, { prefix: '/api/notifications' }); // <--- REGISTRO
+server.register(notificationRoutes, { prefix: '/api/notifications' }); 
 
 const start = async () => {
   try {
-    const port = parseInt(process.env.PORT || '3000');
+    // --- PORTA 3000 (ORIGINAL) ---
+    const port = parseInt(process.env.PORT || '3000'); 
     await server.listen({ port, host: '0.0.0.0' });
     console.log(`🚀 Server running on port ${port}`);
   } catch (err) {

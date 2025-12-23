@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { db } from '../db/client';
 import { authenticate } from '../middleware/auth';
+import { emailService } from '../services/email'; // <--- Importação
 
 export async function dealRoutes(app: FastifyInstance) {
   app.addHook('onRequest', authenticate);
@@ -15,14 +16,14 @@ export async function dealRoutes(app: FastifyInstance) {
       value: z.number().optional().default(0),
       expected_close_date: z.string().optional(),
       description: z.string().optional(),
-      user_id: z.string().uuid().optional(), 
+      user_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional(), 
     });
 
     const data = createDealSchema.parse(request.body);
     const tenantId = request.user?.tenantId;
     
-    // Se for agent, FORÇA o userId dele. Se for admin, pode atribuir a outro (data.user_id)
-    let userId = data.user_id;
+    let userId = (data.user_id === '' ? null : data.user_id);
+
     if (request.user?.role === 'agent') {
         userId = request.user.userId;
     } else if (!userId) {
@@ -68,6 +69,7 @@ export async function dealRoutes(app: FastifyInstance) {
         SELECT 
           d.*,
           c.name as contact_name,
+          s.name as stage_name,
           u.name as user_name,
           u.email as user_email
         FROM deals d
@@ -99,7 +101,7 @@ export async function dealRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- PUT /api/deals/:id/move (Mover) ---
+  // --- PUT /api/deals/:id/move (Mover + Notificação) ---
   app.put('/:id/move', async (request, reply) => {
     const { tenantId, role, userId } = request.user!;
     const isAgent = role === 'agent';
@@ -110,7 +112,7 @@ export async function dealRoutes(app: FastifyInstance) {
     const { stage_id } = bodySchema.parse(request.body);
 
     try {
-      let query = `UPDATE deals SET stage_id = $1 WHERE id = $2 AND tenant_id = $3`;
+      let query = `UPDATE deals SET stage_id = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3`;
       const params = [stage_id, id, tenantId];
 
       if (isAgent) {
@@ -122,6 +124,40 @@ export async function dealRoutes(app: FastifyInstance) {
       const result = await db.query(query, params);
 
       if (result.rowCount === 0) return reply.status(404).send({ error: 'Deal not found or permission denied' });
+      
+      const deal = result.rows[0];
+
+      // --- LÓGICA DE E-MAIL (Notificar Cliente sobre Progresso) ---
+      const infoRes = await db.query(`
+        SELECT 
+            s.name as stage_name,
+            c.email as contact_email,
+            c.name as contact_name
+        FROM stages s, contacts c
+        WHERE s.id = $1 AND c.id = $2
+      `, [stage_id, deal.contact_id]);
+
+      if (infoRes.rowCount && infoRes.rowCount > 0) {
+          const info = infoRes.rows[0];
+          
+          if (info.contact_email) {
+              const emailBody = `
+                  <div style="font-family: Arial, sans-serif; padding: 20px;">
+                    <h3 style="color: #333;">Olá, ${info.contact_name}!</h3>
+                    <p>Gostaríamos de informar que o status do seu projeto <strong>"${deal.title}"</strong> foi atualizado.</p>
+                    <p><strong>Nova Etapa:</strong> <span style="background:#e0f2fe; color:#0284c7; padding:4px 8px; border-radius:4px;">${info.stage_name}</span></p>
+                    <p>Estamos à disposição para qualquer dúvida.</p>
+                    <br/>
+                    <small style="color: #888;">Atenciosamente,<br/>Equipe de Projetos</small>
+                  </div>
+              `;
+
+              emailService.send(tenantId, info.contact_email, `Atualização de Projeto: ${deal.title}`, emailBody)
+                .catch(e => console.error('Erro ao notificar cliente sobre deal:', e));
+          }
+      }
+      // -------------------------------------------------------------
+
       return result.rows[0];
     } catch (error) {
       console.error(error);
@@ -131,40 +167,56 @@ export async function dealRoutes(app: FastifyInstance) {
 
   // --- PUT /api/deals/:id (Editar) ---
   app.put('/:id', async (request, reply) => {
-    // Mesma lógica de segurança
     const { tenantId, role, userId } = request.user!;
     const isAgent = role === 'agent';
     const paramsSchema = z.object({ id: z.string().uuid() });
+    
     const updateSchema = z.object({
-      title: z.string().min(1),
+      title: z.string().min(1).optional(),
       value: z.number().optional(),
       contact_id: z.string().uuid().optional(),
       description: z.string().optional(),
-      user_id: z.string().uuid().optional(),
+      user_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional(),
     });
 
     const { id } = paramsSchema.parse(request.params);
     const data = updateSchema.parse(request.body);
 
     try {
-      // Agent não pode mudar o dono (user_id)
-      let targetUserId = data.user_id;
+      let targetUserId = (data.user_id === '' ? null : data.user_id);
+      
       if (isAgent) targetUserId = userId; 
 
-      let query = `
-        UPDATE deals 
-        SET title = $1, value = $2, contact_id = $3, description = $4, user_id = $5
-        WHERE id = $6 AND tenant_id = $7
-      `;
-      const params = [data.title, data.value, data.contact_id, data.description, targetUserId, id, tenantId];
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (data.title !== undefined) { fields.push(`title = $${idx++}`); values.push(data.title); }
+      if (data.value !== undefined) { fields.push(`value = $${idx++}`); values.push(data.value); }
+      if (data.contact_id !== undefined) { fields.push(`contact_id = $${idx++}`); values.push(data.contact_id); }
+      if (data.description !== undefined) { fields.push(`description = $${idx++}`); values.push(data.description); }
+      
+      // Update User ID (Admin Only)
+      if (!isAgent && data.user_id !== undefined) {
+          fields.push(`user_id = $${idx++}`);
+          values.push(targetUserId); 
+      }
+
+      // Updated At
+      fields.push(`updated_at = NOW()`);
+
+      if (fields.length === 1) return reply.send({ message: 'No changes' }); // Só tem updated_at
+
+      values.push(id, tenantId);
+      let query = `UPDATE deals SET ${fields.join(', ')} WHERE id = $${idx++} AND tenant_id = $${idx++}`;
 
       if (isAgent) {
-          query += ' AND user_id = $8';
-          params.push(userId);
+          values.push(userId);
+          query += ` AND user_id = $${idx++}`;
       }
       query += ' RETURNING *';
 
-      const result = await db.query(query, params);
+      const result = await db.query(query, values);
 
       if (result.rowCount === 0) return reply.status(404).send({ error: 'Deal not found or permission denied' });
       return result.rows[0];
@@ -174,7 +226,7 @@ export async function dealRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- DELETE /api/deals/:id (Excluir - Bloqueado) ---
+  // --- DELETE /api/deals/:id (Excluir) ---
   app.delete('/:id', async (request, reply) => {
     if (request.user?.role === 'agent') {
         return reply.status(403).send({ error: 'Permission denied.' });
@@ -198,9 +250,7 @@ export async function dealRoutes(app: FastifyInstance) {
     }
   });
 
-  // ==========================================
-  // SUB-ROTAS DE COMENTÁRIOS
-  // ==========================================
+  // --- COMENTÁRIOS ---
   app.get('/:id/comments', async (request, reply) => {
     const { tenantId, role, userId } = request.user!;
     const isAgent = role === 'agent';

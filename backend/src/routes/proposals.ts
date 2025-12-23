@@ -2,14 +2,13 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { db } from '../db/client';
 import { authenticate } from '../middleware/auth';
+import { emailService } from '../services/email'; // <--- Importação do serviço
 
 export async function proposalRoutes(app: FastifyInstance) {
   
   // ===========================================================================
-  // ROTAS PÚBLICAS (VISÃO DO CLIENTE)
+  // ROTA PÚBLICA (VISÃO DO CLIENTE)
   // ===========================================================================
-  
-  // 1. Visualizar Proposta
   app.get('/:id/public', async (request, reply) => {
     const paramsSchema = z.object({ id: z.string().uuid() });
     const { id } = paramsSchema.parse(request.params);
@@ -53,12 +52,11 @@ export async function proposalRoutes(app: FastifyInstance) {
     }
   });
 
-  // 2. Aceitar Proposta (Público)
+  // Aceitar Proposta (Público)
   app.post('/:id/public/accept', async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
 
     try {
-        // Verifica se já não está respondida
         const check = await db.query("SELECT status FROM proposals WHERE id = $1", [id]);
         if (check.rowCount === 0) return reply.status(404).send({ error: 'Not found' });
         if (['accepted', 'rejected'].includes(check.rows[0].status)) {
@@ -70,8 +68,6 @@ export async function proposalRoutes(app: FastifyInstance) {
             SET status = 'accepted', updated_at = NOW() 
             WHERE id = $1
         `, [id]);
-
-        // Opcional: Criar notificação para o vendedor aqui (futuro)
         
         return { message: 'Proposta aceita com sucesso!' };
     } catch (error) {
@@ -79,7 +75,7 @@ export async function proposalRoutes(app: FastifyInstance) {
     }
   });
 
-  // 3. Rejeitar Proposta (Público)
+  // Rejeitar Proposta (Público)
   app.post('/:id/public/reject', async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
 
@@ -213,7 +209,7 @@ export async function proposalRoutes(app: FastifyInstance) {
       }
     });
 
-    // PATCH /api/proposals/:id/status (Alterar Status - Interno)
+    // PATCH /api/proposals/:id/status (Alterar Status + Disparo de E-mail)
     protectedRoutes.patch('/:id/status', async (request, reply) => {
         const paramsSchema = z.object({ id: z.string().uuid() });
         const bodySchema = z.object({ status: z.enum(['draft', 'sent', 'accepted', 'rejected']) });
@@ -226,11 +222,45 @@ export async function proposalRoutes(app: FastifyInstance) {
             const result = await db.query(`
                 UPDATE proposals SET status = $1, updated_at = NOW()
                 WHERE id = $2 AND tenant_id = $3
-                RETURNING id, status
+                RETURNING *
             `, [status, id, tenantId]);
             
             if (result.rowCount === 0) return reply.status(404).send({ error: 'Proposta não encontrada.' });
-            return result.rows[0];
+            
+            const proposal = result.rows[0];
+
+            // --- LÓGICA DE ENVIO DE E-MAIL ---
+            if (status === 'sent' && proposal.contact_id) {
+                // Busca dados do contato para enviar
+                const contactRes = await db.query(`SELECT email, name FROM contacts WHERE id = $1`, [proposal.contact_id]);
+                const contact = contactRes.rows[0];
+
+                if (contact && contact.email) {
+                    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+                    const publicLink = `${frontendUrl}/proposal/${proposal.id}`;
+                    
+                    const emailBody = `
+                        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 5px;">
+                            <h2 style="color: #333;">Olá, ${contact.name}!</h2>
+                            <p>Você recebeu uma nova proposta comercial: <strong>${proposal.title}</strong>.</p>
+                            <p style="font-size: 1.1em;">Valor Total: <strong>R$ ${Number(proposal.total_amount).toFixed(2)}</strong></p>
+                            <br/>
+                            <p>Acesse o link abaixo para visualizar os detalhes, aprovar ou rejeitar:</p>
+                            <a href="${publicLink}" style="background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">Ver Proposta Online</a>
+                            <br/><br/>
+                            <hr style="border: 0; border-top: 1px solid #eee;">
+                            <small style="color: #777;">Este é um e-mail automático enviado via CRM SaaS.</small>
+                        </div>
+                    `;
+
+                    // Envia assincronamente (não trava a resposta)
+                    emailService.send(tenantId, contact.email, `Nova Proposta: ${proposal.title}`, emailBody)
+                        .catch(err => console.error('Erro ao enviar email de proposta:', err));
+                }
+            }
+            // ---------------------------------
+            
+            return proposal;
         } catch (error) {
             return reply.status(500).send({ error: 'Erro ao atualizar status.' });
         }
