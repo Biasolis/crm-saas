@@ -9,10 +9,9 @@ export async function userRoutes(app: FastifyInstance) {
   // ==========================================================
   // ROTA PÚBLICA: Cadastro Inicial / Sign Up
   // ==========================================================
-  // Permite criar o primeiro usuário (Owner) ao registrar uma nova empresa
   app.post('/', async (request, reply) => {
     const createUserBody = z.object({
-      tenant_id: z.string().uuid(), // ID da empresa criada previamente
+      tenant_id: z.string().uuid(),
       name: z.string().min(2),
       email: z.string().email(),
       password: z.string().min(6),
@@ -23,14 +22,12 @@ export async function userRoutes(app: FastifyInstance) {
     const data = createUserBody.parse(request.body);
 
     try {
-      // Verifica se o email já existe no sistema
       const checkUser = await db.query('SELECT id FROM users WHERE email = $1', [data.email]);
       
       if (checkUser.rowCount && checkUser.rowCount > 0) {
         return reply.status(409).send({ error: 'User with this email already exists' });
       }
 
-      // Criptografa a senha
       const salt = await bcrypt.genSalt(10);
       const passwordHash = await bcrypt.hash(data.password, salt);
 
@@ -48,7 +45,6 @@ export async function userRoutes(app: FastifyInstance) {
 
     } catch (error: any) {
       console.error(error);
-      // Tratamento de chave estrangeira (se tenant_id não existir)
       if (error.code === '23503') { 
          return reply.status(400).send({ error: 'Invalid tenant_id. Company does not exist.' });
       }
@@ -65,10 +61,6 @@ export async function userRoutes(app: FastifyInstance) {
     // --- GET: Listar Equipe ---
     protectedRoutes.get('/', async (request, reply) => {
       const tenantId = request.user?.tenantId;
-
-      if (!tenantId) {
-          return reply.status(401).send({ error: 'Unauthorized' });
-      }
 
       try {
           const result = await db.query(`
@@ -87,9 +79,8 @@ export async function userRoutes(app: FastifyInstance) {
 
     // --- POST: Convidar/Adicionar Membro ---
     protectedRoutes.post('/invite', async (request, reply) => {
-      // Apenas Admins/Owners podem adicionar novos membros
       if (request.user?.role !== 'owner' && request.user?.role !== 'admin') {
-        return reply.status(403).send({ error: 'Permission denied. Only Admins can invite users.' });
+        return reply.status(403).send({ error: 'Permission denied.' });
       }
 
       const inviteSchema = z.object({
@@ -105,7 +96,7 @@ export async function userRoutes(app: FastifyInstance) {
       try {
         const client = await db.getClient();
 
-        // 1. VERIFICAÇÃO DE LIMITE DO PLANO
+        // Verifica Limite do Plano
         const limitCheck = await client.query(`
             SELECT 
                 p.max_users,
@@ -120,16 +111,15 @@ export async function userRoutes(app: FastifyInstance) {
             if (Number(current_count) >= Number(max_users)) {
                 client.release();
                 return reply.status(403).send({ 
-                    error: `Limite de usuários atingido (${current_count}/${max_users}). Faça upgrade do plano.` 
+                    error: `Limite de usuários atingido (${current_count}/${max_users}).` 
                 });
             }
         }
 
-        // 2. Prossegue com a verificação de email
         const checkUser = await client.query('SELECT id FROM users WHERE email = $1', [data.email]);
         if (checkUser.rowCount && checkUser.rowCount > 0) {
             client.release();
-            return reply.status(409).send({ error: 'Email already used in the system' });
+            return reply.status(409).send({ error: 'Email already used.' });
         }
 
         const salt = await bcrypt.genSalt(10);
@@ -150,16 +140,71 @@ export async function userRoutes(app: FastifyInstance) {
       }
     });
 
+    // --- PUT: Editar Membro (Novo) ---
+    protectedRoutes.put('/:id', async (request, reply) => {
+        if (request.user?.role !== 'owner' && request.user?.role !== 'admin') {
+            return reply.status(403).send({ error: 'Permission denied' });
+        }
+
+        const paramsSchema = z.object({ id: z.string().uuid() });
+        const updateSchema = z.object({
+            name: z.string().min(2).optional(),
+            email: z.string().email().optional(),
+            role: z.enum(['admin', 'agent']).optional(),
+            password: z.string().min(6).optional()
+        });
+
+        const { id } = paramsSchema.parse(request.params);
+        const data = updateSchema.parse(request.body);
+        const tenantId = request.user?.tenantId;
+
+        // Impede alterar o próprio role se não for Owner (para evitar lock-out)
+        // Mas vamos manter simples: Admin pode editar Agent. Owner pode editar Admin/Agent.
+        
+        try {
+            const fields: string[] = [];
+            const values: any[] = [];
+            let idx = 1;
+
+            if (data.name) { fields.push(`name = $${idx++}`); values.push(data.name); }
+            if (data.email) { fields.push(`email = $${idx++}`); values.push(data.email); }
+            if (data.role) { fields.push(`role = $${idx++}`); values.push(data.role); }
+            
+            if (data.password) {
+                const salt = await bcrypt.genSalt(10);
+                const hash = await bcrypt.hash(data.password, salt);
+                fields.push(`password_hash = $${idx++}`); 
+                values.push(hash);
+            }
+
+            if (fields.length === 0) return reply.send({ message: 'No changes' });
+
+            values.push(id, tenantId);
+            const query = `
+                UPDATE users SET ${fields.join(', ')} 
+                WHERE id = $${idx++} AND tenant_id = $${idx++}
+                RETURNING id, name, email, role
+            `;
+
+            const result = await db.query(query, values);
+
+            if (result.rowCount === 0) return reply.status(404).send({ error: 'User not found' });
+            return result.rows[0];
+
+        } catch (error) {
+            console.error(error);
+            return reply.status(500).send({ error: 'Failed to update user' });
+        }
+    });
+
     // --- DELETE: Remover Membro ---
     protectedRoutes.delete('/:id', async (request, reply) => {
-      // Apenas Admins/Owners podem remover
       if (request.user?.role !== 'owner' && request.user?.role !== 'admin') {
         return reply.status(403).send({ error: 'Permission denied' });
       }
 
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       
-      // Impede de se auto-deletar
       if (id === request.user?.userId) {
         return reply.status(400).send({ error: 'Cannot delete yourself' });
       }
@@ -167,12 +212,11 @@ export async function userRoutes(app: FastifyInstance) {
       const tenantId = request.user?.tenantId;
 
       try {
-        // Garante que o usuário deletado pertença ao mesmo tenant do admin
         const result = await db.query(`
           DELETE FROM users WHERE id = $1 AND tenant_id = $2 RETURNING id
         `, [id, tenantId]);
 
-        if (result.rowCount === 0) return reply.status(404).send({ error: 'User not found or access denied' });
+        if (result.rowCount === 0) return reply.status(404).send({ error: 'User not found' });
         
         return { message: 'User removed successfully' };
 

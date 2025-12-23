@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus, Trash2, Calendar, User, CheckCircle2, Circle, X, ClipboardList, Loader2, Edit2, AlignLeft, LayoutList, Kanban as KanbanIcon } from 'lucide-react';
+import { Plus, Trash2, Calendar, User, CheckCircle2, Search, X, ClipboardList, Loader2, Edit2, AlignLeft, LayoutList, Kanban as KanbanIcon, Users } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import api from '@/services/api';
 import styles from './page.module.css';
@@ -16,11 +16,15 @@ interface Task {
   description?: string;
   due_date: string | null;
   priority: 'low' | 'medium' | 'high';
-  status: 'pending' | 'in_progress' | 'completed'; // Adicionado in_progress
+  status: 'pending' | 'in_progress' | 'completed';
+  contact_id?: string;
   contact_name?: string;
+  lead_id?: string;
+  lead_name?: string;
+  user_name?: string;
 }
 
-interface Contact { id: string; name: string; }
+interface Option { id: string; name: string; } // Para Contacts e Leads
 
 const taskSchema = z.object({
   title: z.string().min(1, 'Título obrigatório'),
@@ -28,16 +32,20 @@ const taskSchema = z.object({
   due_date: z.string().optional(),
   priority: z.enum(['low', 'medium', 'high']),
   contact_id: z.string().optional(),
-  status: z.enum(['pending', 'in_progress', 'completed']).default('pending'), // Adicionado ao form
+  lead_id: z.string().optional(), // Adicionado
+  status: z.enum(['pending', 'in_progress', 'completed']).default('pending'),
 });
 
 type TaskFormData = z.infer<typeof taskSchema>;
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [viewMode, setViewMode] = useState<'list' | 'board'>('list'); // Estado da visualização
-  const [isBrowser, setIsBrowser] = useState(false); // Para DND
+  const [contacts, setContacts] = useState<Option[]>([]);
+  const [leads, setLeads] = useState<Option[]>([]); // Novo estado para Leads
+  
+  const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isBrowser, setIsBrowser] = useState(false);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -51,11 +59,12 @@ export default function TasksPage() {
 
   useEffect(() => { setIsBrowser(true); }, []);
 
-  // Load
+  // --- Loads ---
   async function fetchTasks() {
     setIsLoading(true);
     try {
-      const res = await api.get(`/api/tasks?status=all`); // Trazemos todas para filtrar no front se precisar
+      const query = searchTerm ? `?status=all&search=${searchTerm}` : `?status=all`;
+      const res = await api.get(`/api/tasks${query}`);
       setTasks(res.data);
     } catch (error) {
       console.error(error);
@@ -64,45 +73,64 @@ export default function TasksPage() {
     }
   }
 
+  // Debounce para busca
   useEffect(() => {
-    fetchTasks();
-    api.get('/api/contacts').then(res => setContacts(res.data.data)).catch(console.error);
+    const timeout = setTimeout(fetchTasks, 500);
+    return () => clearTimeout(timeout);
+  }, [searchTerm]);
+
+  // Carrega opções de contatos e leads
+  useEffect(() => {
+    Promise.all([
+        api.get('/api/contacts'),
+        api.get('/api/leads/pool'), // Pega leads disponíveis (pode ajustar para pegar todos dependendo da regra)
+        api.get('/api/leads/mine')  // Pega leads do usuário
+    ]).then(([resContacts, resPool, resMine]) => {
+        setContacts(resContacts.data.data || resContacts.data);
+        
+        // Combina leads da piscina e meus leads para o select
+        const allLeads = [...(resPool.data || []), ...(resMine.data || [])];
+        // Remove duplicatas por ID
+        const uniqueLeads = Array.from(new Map(allLeads.map(item => [item.id, item])).values());
+        setLeads(uniqueLeads as Option[]);
+    }).catch(console.error);
   }, []);
 
   // --- Actions ---
 
-  // Mudar Status (Usado na Lista e no Kanban)
   async function changeTaskStatus(id: string, newStatus: 'pending' | 'in_progress' | 'completed') {
     // Optimistic Update
     setTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus } : t));
-
     try {
         await api.patch(`/api/tasks/${id}/status`, { status: newStatus });
     } catch (error) {
         console.error(error);
-        fetchTasks(); // Reverte
+        fetchTasks(); // Reverte em erro
     }
   }
 
-  // Drag & Drop no Kanban
   function onDragEnd(result: DropResult) {
     const { destination, draggableId } = result;
     if (!destination) return;
-    
-    // Mapeia o ID da coluna para o status
     const newStatus = destination.droppableId as 'pending' | 'in_progress' | 'completed';
-    
+    if (newStatus === tasks.find(t => t.id === draggableId)?.status) return;
+
     changeTaskStatus(draggableId, newStatus);
   }
 
-  // Save
   async function handleSave(data: TaskFormData) {
     setIsSaving(true);
     try {
+      const payload = {
+        ...data,
+        contact_id: data.contact_id || null, // Garante null se string vazia
+        lead_id: data.lead_id || null
+      };
+
       if (editingTask) {
-        await api.put(`/api/tasks/${editingTask.id}`, data);
+        await api.put(`/api/tasks/${editingTask.id}`, payload);
       } else {
-        await api.post('/api/tasks', data);
+        await api.post('/api/tasks', payload);
       }
       setIsModalOpen(false);
       fetchTasks();
@@ -113,7 +141,6 @@ export default function TasksPage() {
     }
   }
 
-  // Open Modal
   function handleOpenModal(task?: Task) {
     if (task) {
       setEditingTask(task);
@@ -121,9 +148,12 @@ export default function TasksPage() {
       setValue('description', task.description || '');
       setValue('priority', task.priority);
       setValue('status', task.status);
+      setValue('contact_id', task.contact_id || '');
+      setValue('lead_id', task.lead_id || '');
       
       if (task.due_date) {
         const date = new Date(task.due_date);
+        // Ajuste fuso horário simples para input datetime-local
         const isoString = new Date(date.getTime() - (date.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
         setValue('due_date', isoString);
       } else {
@@ -132,15 +162,16 @@ export default function TasksPage() {
     } else {
       setEditingTask(null);
       reset();
+      setValue('status', 'pending');
+      setValue('priority', 'medium');
     }
     setIsModalOpen(true);
   }
 
-  // Delete
   async function deleteTask(id: string) {
-    if (!confirm('Excluir tarefa?')) return;
+    if (!confirm('Excluir tarefa permanentemente?')) return;
     try {
-        setTasks(tasks.filter(t => t.id !== id));
+        setTasks(prev => prev.filter(t => t.id !== id));
         await api.delete(`/api/tasks/${id}`);
     } catch (error) { fetchTasks(); }
   }
@@ -148,18 +179,32 @@ export default function TasksPage() {
   // --- Renders ---
 
   const columns = [
-    { id: 'pending', title: 'A Fazer', color: '#3b82f6' },
-    { id: 'in_progress', title: 'Em Andamento', color: '#f59e0b' },
-    { id: 'completed', title: 'Concluído', color: '#10b981' }
+    { id: 'pending', title: 'A Fazer', color: '#3b82f6', bg: '#eff6ff' },
+    { id: 'in_progress', title: 'Em Andamento', color: '#f59e0b', bg: '#fffbeb' },
+    { id: 'completed', title: 'Concluído', color: '#10b981', bg: '#f0fdf4' }
   ];
 
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
+        <div style={{display:'flex', flexDirection:'column', gap:'0.5rem'}}>
             <h1 className={styles.title}>Minha Agenda</h1>
-            
-            {/* View Toggle */}
+            <p className={styles.subtitle}>Gerencie suas atividades diárias e acompanhamentos.</p>
+        </div>
+
+        <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
+            {/* Busca */}
+            <div className={styles.searchWrapper}>
+                <Search size={16} className={styles.searchIcon} />
+                <input 
+                    placeholder="Buscar tarefa..." 
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    className={styles.searchInput}
+                />
+            </div>
+
+            {/* Toggle View */}
             <div className={styles.viewToggle}>
                 <button 
                     className={`${styles.viewBtn} ${viewMode === 'list' ? styles.viewBtnActive : ''}`}
@@ -176,21 +221,27 @@ export default function TasksPage() {
                     <KanbanIcon size={18} />
                 </button>
             </div>
-        </div>
 
-        <button className={styles.addButton} onClick={() => handleOpenModal()}>
-          <Plus size={20} /> Nova Tarefa
-        </button>
+            <button className={styles.addButton} onClick={() => handleOpenModal()}>
+                <Plus size={20} /> Nova Tarefa
+            </button>
+        </div>
       </div>
 
       {isLoading ? (
-         <div style={{ padding: '2rem', textAlign: 'center' }}><Loader2 className="animate-spin" style={{ margin: '0 auto' }} /></div>
+         <div className={styles.loadingState}><Loader2 className="animate-spin" size={32} /></div>
       ) : (
         <>
             {/* --- MODO LISTA --- */}
             {viewMode === 'list' && (
                 <div className={styles.taskList}>
-                    {tasks.length === 0 && <div className={styles.emptyState}><ClipboardList size={32}/><p>Sem tarefas.</p></div>}
+                    {tasks.length === 0 && (
+                        <div className={styles.emptyState}>
+                            <ClipboardList size={48} strokeWidth={1}/>
+                            <h3>Tudo limpo por aqui!</h3>
+                            <p>Você não tem tarefas pendentes com esse filtro.</p>
+                        </div>
+                    )}
                     
                     {tasks.map(task => (
                     <div key={task.id} className={`${styles.taskItem} ${task.status === 'completed' ? styles.completed : ''}`}>
@@ -207,31 +258,43 @@ export default function TasksPage() {
                         </div>
                         
                         <div className={styles.taskContent}>
-                            <span className={styles.taskTitle}>
-                                {task.title} 
-                                {task.status === 'in_progress' && <span style={{fontSize:'0.7rem', background:'#fef3c7', color:'#d97706', padding:'2px 6px', borderRadius:'4px', marginLeft:'8px'}}>EM ANDAMENTO</span>}
-                            </span>
-                            {task.description && (
-                                <div style={{fontSize: '0.85rem', color: '#64748b', marginTop: '0.2rem', display: 'flex', alignItems: 'center', gap: '4px'}}>
-                                    <AlignLeft size={12} /> {task.description.length > 50 ? task.description.slice(0,50)+'...' : task.description}
-                                </div>
-                            )}
-                            <div className={styles.taskMeta}>
-                                {task.due_date && (
-                                    <span style={{display: 'flex', alignItems: 'center', gap: '4px', color: new Date(task.due_date) < new Date() && task.status !== 'completed' ? '#ef4444' : 'inherit'}}>
-                                        <Calendar size={14} /> 
-                                        {new Date(task.due_date).toLocaleDateString()}
-                                    </span>
-                                )}
+                            <div className={styles.taskHeaderLine}>
+                                <span className={styles.taskTitle}>{task.title}</span>
+                                {task.status === 'in_progress' && <span className={styles.badgeProgress}>EM ANDAMENTO</span>}
                                 <span className={`${styles.priorityBadge} ${styles[`priority-${task.priority}`]}`}>
                                     {task.priority === 'high' ? 'Alta' : task.priority === 'medium' ? 'Média' : 'Baixa'}
                                 </span>
                             </div>
+
+                            {task.description && (
+                                <div className={styles.taskDesc}>
+                                    <AlignLeft size={12} /> {task.description.length > 60 ? task.description.slice(0,60)+'...' : task.description}
+                                </div>
+                            )}
+                            
+                            <div className={styles.taskMetaRow}>
+                                {task.due_date && (
+                                    <span className={`${styles.metaItem} ${new Date(task.due_date) < new Date() && task.status !== 'completed' ? styles.overdue : ''}`}>
+                                        <Calendar size={12} /> 
+                                        {new Date(task.due_date).toLocaleDateString()} {new Date(task.due_date).toLocaleTimeString().slice(0,5)}
+                                    </span>
+                                )}
+                                {task.lead_name && (
+                                    <span className={styles.metaItem} title="Lead Vinculado">
+                                        <Users size={12} /> {task.lead_name}
+                                    </span>
+                                )}
+                                {task.contact_name && !task.lead_name && (
+                                    <span className={styles.metaItem} title="Contato Vinculado">
+                                        <User size={12} /> {task.contact_name}
+                                    </span>
+                                )}
+                            </div>
                         </div>
 
-                        <div style={{display: 'flex', gap: '0.5rem'}}>
-                            <button className={styles.deleteBtn} onClick={() => handleOpenModal(task)}><Edit2 size={18} /></button>
-                            <button className={styles.deleteBtn} onClick={() => deleteTask(task.id)}><Trash2 size={18} /></button>
+                        <div className={styles.actions}>
+                            <button className={styles.iconBtn} onClick={() => handleOpenModal(task)}><Edit2 size={16} /></button>
+                            <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => deleteTask(task.id)}><Trash2 size={16} /></button>
                         </div>
                     </div>
                     ))}
@@ -245,8 +308,8 @@ export default function TasksPage() {
                         {columns.map(col => {
                             const colTasks = tasks.filter(t => t.status === col.id);
                             return (
-                                <div key={col.id} className={styles.column}>
-                                    <div className={styles.columnHeader} style={{borderTop: `3px solid ${col.color}`}}>
+                                <div key={col.id} className={styles.column} style={{background: col.bg}}>
+                                    <div className={styles.columnHeader} style={{borderTopColor: col.color}}>
                                         <span>{col.title}</span>
                                         <span className={styles.columnCount}>{colTasks.length}</span>
                                     </div>
@@ -256,28 +319,40 @@ export default function TasksPage() {
                                                 className={styles.columnBody}
                                                 ref={provided.innerRef}
                                                 {...provided.droppableProps}
-                                                style={{background: snapshot.isDraggingOver ? '#f1f5f9' : 'transparent'}}
+                                                style={{background: snapshot.isDraggingOver ? 'rgba(0,0,0,0.02)' : 'transparent'}}
                                             >
                                                 {colTasks.map((task, index) => (
                                                     <Draggable key={task.id} draggableId={task.id} index={index}>
-                                                        {(provided) => (
+                                                        {(provided, snapshot) => (
                                                             <div
                                                                 className={styles.card}
                                                                 ref={provided.innerRef}
                                                                 {...provided.draggableProps}
                                                                 {...provided.dragHandleProps}
                                                                 onClick={() => handleOpenModal(task)}
+                                                                style={{
+                                                                    ...provided.draggableProps.style,
+                                                                    opacity: snapshot.isDragging ? 0.8 : 1,
+                                                                    transform: snapshot.isDragging ? `${provided.draggableProps.style?.transform} rotate(2deg)` : provided.draggableProps.style?.transform
+                                                                }}
                                                             >
-                                                                <div className={styles.cardTitle}>{task.title}</div>
-                                                                <div className={styles.taskMeta} style={{marginTop: '0.5rem'}}>
-                                                                    <span className={`${styles.priorityBadge} ${styles[`priority-${task.priority}`]}`}>
-                                                                        {task.priority === 'high' ? 'Alta' : 'Normal'}
-                                                                    </span>
-                                                                    {task.due_date && (
-                                                                        <span style={{fontSize:'0.75rem', display:'flex', alignItems:'center', gap:'2px'}}>
-                                                                            <Calendar size={12}/> {new Date(task.due_date).toLocaleDateString().slice(0,5)}
-                                                                        </span>
-                                                                    )}
+                                                                <div className={styles.cardHeader}>
+                                                                    <span className={`${styles.priorityDot} ${styles[`priority-${task.priority}`]}`}></span>
+                                                                    <span className={styles.cardTitleBoard}>{task.title}</span>
+                                                                </div>
+                                                                
+                                                                <div className={styles.cardFooter}>
+                                                                     {task.lead_name ? (
+                                                                        <div className={styles.cardTag}><Users size={10}/> {task.lead_name.split(' ')[0]}</div>
+                                                                     ) : task.contact_name ? (
+                                                                        <div className={styles.cardTag}><User size={10}/> {task.contact_name.split(' ')[0]}</div>
+                                                                     ) : <div></div>}
+
+                                                                     {task.due_date && (
+                                                                        <div className={`${styles.cardDate} ${new Date(task.due_date) < new Date() && task.status !== 'completed' ? styles.overdueText : ''}`}>
+                                                                            {new Date(task.due_date).toLocaleDateString().slice(0,5)}
+                                                                        </div>
+                                                                     )}
                                                                 </div>
                                                             </div>
                                                         )}
@@ -302,44 +377,72 @@ export default function TasksPage() {
             <div className={styles.modalContent}>
                 <div className={styles.modalHeader}>
                     <h3>{editingTask ? 'Editar Tarefa' : 'Nova Tarefa'}</h3>
-                    <button onClick={() => setIsModalOpen(false)} style={{background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280'}}><X size={24}/></button>
+                    <button onClick={() => setIsModalOpen(false)} className={styles.closeBtn}><X size={20}/></button>
                 </div>
                 <form onSubmit={handleSubmit(handleSave)}>
-                    <div className={styles.formGroup}>
-                        <label>O que precisa ser feito?</label>
-                        <input {...register('title')} className={styles.input} autoFocus />
-                    </div>
-                    <div className={styles.formGroup}>
-                        <label>Status Inicial</label>
-                        <select {...register('status')} className={styles.select}>
-                            <option value="pending">A Fazer</option>
-                            <option value="in_progress">Em Andamento</option>
-                            <option value="completed">Concluída</option>
-                        </select>
-                    </div>
-                    {/* Resto do formulário igual... */}
-                    <div className={styles.formGroup}>
-                        <label>Descrição</label>
-                        <textarea {...register('description')} className={styles.input} style={{minHeight:'80px', resize:'vertical'}} />
-                    </div>
-                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem'}}>
+                    <div className={styles.modalBody}>
                         <div className={styles.formGroup}>
-                            <label>Data e Hora</label>
+                            <label>O que precisa ser feito?</label>
+                            <input {...register('title')} className={styles.input} autoFocus placeholder="Ex: Ligar para cliente..." />
+                            {/* Erros se necessário */}
+                        </div>
+                        
+                        <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem'}}>
+                            <div className={styles.formGroup}>
+                                <label>Status</label>
+                                <select {...register('status')} className={styles.select}>
+                                    <option value="pending">A Fazer</option>
+                                    <option value="in_progress">Em Andamento</option>
+                                    <option value="completed">Concluída</option>
+                                </select>
+                            </div>
+                            <div className={styles.formGroup}>
+                                <label>Prioridade</label>
+                                <select {...register('priority')} className={styles.select}>
+                                    <option value="low">Baixa</option>
+                                    <option value="medium">Média</option>
+                                    <option value="high">Alta</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className={styles.formGroup}>
+                            <label>Data e Hora Limite</label>
                             <input {...register('due_date')} type="datetime-local" className={styles.input} />
                         </div>
+
+                        {/* SELEÇÃO DE VÍNCULO (LEAD OU CONTATO) */}
+                        <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem'}}>
+                            <div className={styles.formGroup}>
+                                <label>Vincular a Lead</label>
+                                <select {...register('lead_id')} className={styles.select}>
+                                    <option value="">Nenhum</option>
+                                    {leads.map(l => (
+                                        <option key={l.id} value={l.id}>{l.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className={styles.formGroup}>
+                                <label>Vincular a Contato</label>
+                                <select {...register('contact_id')} className={styles.select}>
+                                    <option value="">Nenhum</option>
+                                    {contacts.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
                         <div className={styles.formGroup}>
-                            <label>Prioridade</label>
-                            <select {...register('priority')} className={styles.select}>
-                                <option value="low">Baixa</option>
-                                <option value="medium">Média</option>
-                                <option value="high">Alta</option>
-                            </select>
+                            <label>Descrição</label>
+                            <textarea {...register('description')} className={styles.textarea} placeholder="Detalhes adicionais..." />
                         </div>
                     </div>
+
                     <div className={styles.modalFooter}>
                         <button type="button" className={styles.cancelButton} onClick={() => setIsModalOpen(false)}>Cancelar</button>
                         <button type="submit" disabled={isSaving} className={styles.saveButton}>
-                            {isSaving ? <Loader2 className="animate-spin" size={16}/> : 'Salvar'}
+                            {isSaving ? <Loader2 className="animate-spin" size={16}/> : 'Salvar Tarefa'}
                         </button>
                     </div>
                 </form>

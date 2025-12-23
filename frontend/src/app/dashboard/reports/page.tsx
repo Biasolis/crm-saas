@@ -1,188 +1,199 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Calendar, Search, Trophy, TrendingUp, Users, DollarSign, Loader2 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { BarChart3, TrendingUp, Users, DollarSign, Target, Loader2, AlertCircle } from 'lucide-react';
 import api from '@/services/api';
-// Podemos usar um CSS Module novo ou reutilizar o do Dashboard
-// Vou criar estilos inline para facilitar a cópia rápida neste exemplo complexo
-import styles from '../page.module.css'; // Reutilizando estilos básicos do dashboard
+import styles from './page.module.css';
 
-interface ReportData {
-  period: { start: string; end: string };
-  sales: { count: number; value: number };
-  sellers_ranking: { name: string; deals_won: string; total_value: string }[];
-  conversion: { total_leads: number; converted_leads: number };
+interface AnalyticsData {
+  leads: {
+    new: number;
+    in_progress: number;
+    converted: number;
+    lost: number;
+    total: number;
+  };
+  revenue: {
+    sent: number;
+    accepted: number;
+    rejected: number;
+  };
+  conversionRate: string;
+  agents: Array<{
+    id: string;
+    name: string;
+    converted_leads: string;
+    completed_tasks: string;
+  }>;
 }
 
 export default function ReportsPage() {
-  const [data, setData] = useState<ReportData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  
-  // Filtros de Data (Padrão: Últimos 30 dias)
-  const [startDate, setStartDate] = useState(new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [data, setData] = useState<AnalyticsData | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  async function fetchReports() {
-    setIsLoading(true);
-    try {
-      const res = await api.get(`/api/analytics?startDate=${startDate}&endDate=${endDate}`);
-      setData(res.data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setIsLoading(false);
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const res = await api.get('/api/analytics/dashboard');
+        setData(res.data);
+      } catch (error) {
+        console.error('Erro ao carregar relatórios', error);
+      } finally {
+        setLoading(false);
+      }
     }
-  }
+    loadData();
+  }, []);
 
-  useEffect(() => { fetchReports(); }, []); // Carrega inicial
+  if (loading) return <div style={{display:'flex', justifyContent:'center', padding:'4rem'}}><Loader2 className="animate-spin" /></div>;
+  if (!data) return <div style={{padding:'2rem', textAlign:'center'}}><AlertCircle style={{margin:'0 auto'}}/> Erro ao carregar dados.</div>;
 
-  if (!data && isLoading) return <div style={{padding:'2rem', textAlign:'center'}}><Loader2 className="animate-spin" /></div>;
+  // Formatter
+  const formatBRL = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+
+  // Cálculos para o Funil (Porcentagens visuais)
+  const maxLeads = Math.max(data.leads.total, 1); // Evita divisão por zero
+  const pctNew = (data.leads.total / maxLeads) * 100; // Topo do funil (Todos)
+  const pctProgress = ((data.leads.in_progress + data.leads.converted) / maxLeads) * 100; // Meio do funil
+  const pctConverted = (data.leads.converted / maxLeads) * 100; // Fundo do funil
 
   return (
-    <div style={{display:'flex', flexDirection:'column', gap:'2rem'}}>
-      
-      {/* Header com Filtros */}
-      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'1rem'}}>
-        <div>
-            <h1 style={{fontSize:'1.5rem', fontWeight:700, color:'#111827'}}>Relatórios de Performance</h1>
-            <p style={{color:'#6b7280', fontSize:'0.9rem'}}>Análise detalhada de vendas e conversão.</p>
+    <div className={styles.container}>
+      <div className={styles.header}>
+        <h1 className={styles.title}>
+            <BarChart3 color="#2563eb" /> Visão Geral & Relatórios
+        </h1>
+        <p className={styles.subtitle}>Métricas de desempenho em tempo real.</p>
+      </div>
+
+      {/* --- GRID DE KPIS --- */}
+      <div className={styles.kpiGrid}>
+        {/* Total Leads */}
+        <div className={styles.kpiCard}>
+            <div className={styles.kpiLabel}>Total de Leads</div>
+            <div className={styles.kpiValue}>{data.leads.total}</div>
+            <div className={styles.kpiSub} style={{color: '#2563eb'}}>
+                <Users size={14} style={{display:'inline', marginRight:4}}/>
+                Na base de dados
+            </div>
         </div>
 
-        <div style={{display:'flex', gap:'0.5rem', alignItems:'center', background:'white', padding:'0.5rem', borderRadius:'8px', border:'1px solid #e5e7eb'}}>
-            <div style={{display:'flex', alignItems:'center', gap:'0.5rem'}}>
-                <Calendar size={16} color="#6b7280"/>
-                <input 
-                    type="date" 
-                    value={startDate} 
-                    onChange={e => setStartDate(e.target.value)}
-                    style={{border:'none', outline:'none', color:'#4b5563', fontSize:'0.9rem'}}
-                />
+        {/* Taxa de Conversão */}
+        <div className={styles.kpiCard}>
+            <div className={styles.kpiLabel}>Taxa de Conversão</div>
+            <div className={styles.kpiValue}>{data.conversionRate}%</div>
+            <div className={styles.kpiSub} style={{color: Number(data.conversionRate) > 10 ? '#059669' : '#d97706'}}>
+                <Target size={14} style={{display:'inline', marginRight:4}}/>
+                Leads convertidos
             </div>
-            <span style={{color:'#9ca3af'}}>até</span>
-            <div style={{display:'flex', alignItems:'center', gap:'0.5rem'}}>
-                <input 
-                    type="date" 
-                    value={endDate} 
-                    onChange={e => setEndDate(e.target.value)}
-                    style={{border:'none', outline:'none', color:'#4b5563', fontSize:'0.9rem'}}
-                />
+        </div>
+
+        {/* Receita Garantida */}
+        <div className={styles.kpiCard}>
+            <div className={styles.kpiLabel}>Receita Fechada</div>
+            <div className={styles.kpiValue} style={{color: '#059669'}}>
+                {formatBRL(data.revenue.accepted)}
             </div>
-            <button 
-                onClick={fetchReports}
-                style={{marginLeft:'0.5rem', background:'#2563eb', color:'white', border:'none', padding:'0.4rem 0.8rem', borderRadius:'6px', cursor:'pointer'}}
-            >
-                <Search size={16} />
-            </button>
+            <div className={styles.kpiSub}>
+                <DollarSign size={14} style={{display:'inline', marginRight:4}}/>
+                Propostas aceitas
+            </div>
+        </div>
+
+        {/* Pipeline (Em Negociação) */}
+        <div className={styles.kpiCard}>
+            <div className={styles.kpiLabel}>Em Negociação</div>
+            <div className={styles.kpiValue} style={{color: '#4b5563'}}>
+                {formatBRL(data.revenue.sent)}
+            </div>
+            <div className={styles.kpiSub}>
+                <TrendingUp size={14} style={{display:'inline', marginRight:4}}/>
+                Propostas enviadas
+            </div>
         </div>
       </div>
 
-      {isLoading ? (
-         <div style={{padding:'4rem', textAlign:'center'}}><Loader2 className="animate-spin" style={{margin:'auto'}} /></div>
-      ) : data ? (
-        <>
-            {/* KPI Cards */}
-            <div className={styles.grid}> {/* Reutiliza classe grid do dashboard */}
-                <div className={styles.card}>
-                    <div className={styles.cardHeader}>
-                        <span className={styles.cardTitle}>Vendas no Período</span>
-                        <DollarSign size={20} color="#22c55e" />
-                    </div>
-                    <div className={styles.cardValue} style={{color: '#22c55e'}}>
-                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(data.sales.value)}
-                    </div>
-                    <div style={{fontSize:'0.8rem', color:'#6b7280', marginTop:'0.5rem'}}>
-                        {data.sales.count} negócios fechados
+      {/* --- SECTIONS GRID --- */}
+      <div className={styles.sectionsGrid}>
+        
+        {/* FUNIL DE VENDAS */}
+        <div className={styles.sectionCard}>
+            <h3 className={styles.sectionTitle}>Funil de Vendas</h3>
+            
+            <div className={styles.funnelContainer}>
+                {/* Etapa 1: Visitantes/Total */}
+                <div className={styles.funnelStep}>
+                    <div className={styles.funnelBar} style={{width: `${pctNew}%`, background: '#dbeafe'}}></div>
+                    <div className={styles.funnelLabel}>
+                        <span>Leads Totais</span>
+                        <span>{data.leads.total}</span>
                     </div>
                 </div>
 
-                <div className={styles.card}>
-                    <div className={styles.cardHeader}>
-                        <span className={styles.cardTitle}>Taxa de Conversão</span>
-                        <TrendingUp size={20} color="#f59e0b" />
-                    </div>
-                    <div className={styles.cardValue}>
-                        {data.conversion.total_leads > 0 
-                            ? ((data.conversion.converted_leads / data.conversion.total_leads) * 100).toFixed(1) 
-                            : 0}%
-                    </div>
-                    <div style={{fontSize:'0.8rem', color:'#6b7280', marginTop:'0.5rem'}}>
-                        {data.conversion.converted_leads} de {data.conversion.total_leads} leads
+                {/* Etapa 2: Em Atendimento */}
+                <div className={styles.funnelStep}>
+                    <div className={styles.funnelBar} style={{width: `${pctProgress}%`, background: '#93c5fd'}}></div>
+                    <div className={styles.funnelLabel}>
+                        <span>Em Atendimento</span>
+                        <span>{data.leads.in_progress + data.leads.converted}</span>
                     </div>
                 </div>
 
-                <div className={styles.card}>
-                    <div className={styles.cardHeader}>
-                        <span className={styles.cardTitle}>Melhor Vendedor</span>
-                        <Trophy size={20} color="#8b5cf6" />
+                {/* Etapa 3: Convertidos */}
+                <div className={styles.funnelStep}>
+                    <div className={styles.funnelBar} style={{width: `${pctConverted}%`, background: '#86efac'}}></div>
+                    <div className={styles.funnelLabel}>
+                        <span>Vendas Realizadas</span>
+                        <span>{data.leads.converted}</span>
                     </div>
-                    <div className={styles.cardValue} style={{fontSize:'1.5rem'}}>
-                        {data.sellers_ranking[0]?.name || '-'}
-                    </div>
-                    <div style={{fontSize:'0.8rem', color:'#6b7280', marginTop:'0.5rem'}}>
-                        {data.sellers_ranking[0] 
-                            ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(data.sellers_ranking[0].total_value))
-                            : 'Sem vendas'}
-                    </div>
+                </div>
+
+                {/* Perdidos (Visualmente separado) */}
+                <div style={{marginTop: '1rem', paddingTop: '0.5rem', borderTop: '1px dashed #e5e7eb', fontSize: '0.85rem', color: '#ef4444', display: 'flex', justifyContent: 'space-between'}}>
+                    <span>Perdidos / Desqualificados</span>
+                    <strong>{data.leads.lost}</strong>
                 </div>
             </div>
+        </div>
 
-            {/* Ranking Detalhado & Gráfico */}
-            <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(400px, 1fr))', gap:'2rem'}}>
-                
-                {/* Tabela de Vendedores */}
-                <div style={{background:'white', padding:'1.5rem', borderRadius:'12px', border:'1px solid #e5e7eb'}}>
-                    <h3 style={{fontSize:'1.1rem', fontWeight:600, marginBottom:'1rem', display:'flex', alignItems:'center', gap:'0.5rem'}}>
-                        <Users size={18} /> Performance da Equipe
-                    </h3>
-                    <table style={{width:'100%', borderCollapse:'collapse'}}>
-                        <thead>
-                            <tr style={{borderBottom:'1px solid #e5e7eb', textAlign:'left'}}>
-                                <th style={{padding:'0.8rem', fontSize:'0.8rem', color:'#6b7280'}}>Vendedor</th>
-                                <th style={{padding:'0.8rem', fontSize:'0.8rem', color:'#6b7280', textAlign:'center'}}>Negócios</th>
-                                <th style={{padding:'0.8rem', fontSize:'0.8rem', color:'#6b7280', textAlign:'right'}}>Valor Total</th>
+        {/* PERFORMANCE EQUIPE */}
+        <div className={styles.sectionCard}>
+            <h3 className={styles.sectionTitle}>Top Performance</h3>
+            
+            {data.agents.length === 0 ? (
+                <p style={{color:'#9ca3af', textAlign:'center', padding:'2rem'}}>Sem dados de equipe ainda.</p>
+            ) : (
+                <table className={styles.table}>
+                    <thead>
+                        <tr>
+                            <th>Vendedor</th>
+                            <th style={{textAlign:'center'}}>Vendas</th>
+                            <th style={{textAlign:'center'}}>Tarefas</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {data.agents.map(agent => (
+                            <tr key={agent.id}>
+                                <td>
+                                    <div className={styles.agentName}>
+                                        <div className={styles.avatar}>{agent.name.charAt(0)}</div>
+                                        {agent.name}
+                                    </div>
+                                </td>
+                                <td style={{textAlign:'center', fontWeight:700, color: '#059669'}}>
+                                    {agent.converted_leads}
+                                </td>
+                                <td style={{textAlign:'center', color: '#6b7280'}}>
+                                    {agent.completed_tasks}
+                                </td>
                             </tr>
-                        </thead>
-                        <tbody>
-                            {data.sellers_ranking.length === 0 && (
-                                <tr><td colSpan={3} style={{padding:'1rem', textAlign:'center', color:'#9ca3af'}}>Sem dados no período</td></tr>
-                            )}
-                            {data.sellers_ranking.map((seller, index) => (
-                                <tr key={index} style={{borderBottom:'1px dashed #f3f4f6'}}>
-                                    <td style={{padding:'0.8rem', fontWeight:500}}>{seller.name}</td>
-                                    <td style={{padding:'0.8rem', textAlign:'center'}}>{seller.deals_won}</td>
-                                    <td style={{padding:'0.8rem', textAlign:'right', fontWeight:600, color:'#059669'}}>
-                                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(seller.total_value))}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+        </div>
 
-                {/* Gráfico Visual */}
-                <div style={{background:'white', padding:'1.5rem', borderRadius:'12px', border:'1px solid #e5e7eb', minHeight:'300px', display:'flex', flexDirection:'column'}}>
-                    <h3 style={{fontSize:'1.1rem', fontWeight:600, marginBottom:'1rem'}}>Ranking Visual</h3>
-                    <div style={{flex:1, width:'100%', minHeight:'250px'}}>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={data.sellers_ranking} layout="vertical" margin={{top: 5, right: 30, left: 40, bottom: 5}}>
-                                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                                <XAxis type="number" hide />
-                                <YAxis dataKey="name" type="category" width={100} style={{fontSize:'0.8rem', fontWeight:500}} />
-                                <Tooltip formatter={(value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value))} />
-                                <Bar dataKey="total_value" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={20}>
-                                    {data.sellers_ranking.map((entry, index) => (
-                                        <Cell key={`cell-${index}`} fill={index === 0 ? '#f59e0b' : '#3b82f6'} />
-                                    ))}
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </div>
-                </div>
-
-            </div>
-        </>
-      ) : null}
+      </div>
     </div>
   );
 }

@@ -4,20 +4,18 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { leadsService } from '@/services/leads';
 import { Lead } from '@/types';
-import { Plus, Download, UserPlus } from 'lucide-react';
+import { Plus, UserPlus } from 'lucide-react'; 
 import styles from './pool.module.css';
 
 import NewLeadModal from '@/components/leads/NewLeadModal';
-import ImportCSVModal from '@/components/leads/ImportCSVModal';
 
 export default function LeadPoolPage() {
-  const { user, loading: authLoading } = useAuth();
+  const { loading: authLoading } = useAuth();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Estados dos Modais
   const [isNewLeadOpen, setIsNewLeadOpen] = useState(false);
-  const [isImportOpen, setIsImportOpen] = useState(false);
 
   const fetchLeads = async () => {
     try {
@@ -32,7 +30,7 @@ export default function LeadPoolPage() {
   };
 
   useEffect(() => {
-    // Só busca os leads se o usuário já estiver carregado
+    // Aguarda auth carregar para buscar
     if (!authLoading) {
         fetchLeads();
     }
@@ -62,14 +60,7 @@ export default function LeadPoolPage() {
           <p>Leads aguardando atendimento. Seja rápido!</p>
         </div>
         
-        {/* Botões visíveis para TODOS os usuários */}
         <div className={styles.actions}>
-          <button 
-            className={styles.btnSecondary}
-            onClick={() => setIsImportOpen(true)}
-          >
-            <Download size={16} /> Importar CSV
-          </button>
           <button 
             className={styles.btnPrimary}
             onClick={() => setIsNewLeadOpen(true)}
@@ -84,7 +75,7 @@ export default function LeadPoolPage() {
       ) : leads.length === 0 ? (
         <div className={styles.emptyState}>
           <h3>A piscina está vazia! 🏊‍♂️</h3>
-          <p>Seja o primeiro a importar leads.</p>
+          <p>Seja o primeiro a importar leads ou criar um novo.</p>
         </div>
       ) : (
         <div className={styles.tableContainer}>
@@ -121,15 +112,9 @@ export default function LeadPoolPage() {
         </div>
       )}
 
-      {/* Modais disponíveis para todos */}
       <NewLeadModal 
         isOpen={isNewLeadOpen} 
         onClose={() => setIsNewLeadOpen(false)} 
-        onSuccess={fetchLeads} 
-      />
-      <ImportCSVModal 
-        isOpen={isImportOpen} 
-        onClose={() => setIsImportOpen(false)} 
         onSuccess={fetchLeads} 
       />
     </div>

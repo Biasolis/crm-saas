@@ -1,78 +1,92 @@
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { db } from '../db/client';
 import { authenticate } from '../middleware/auth';
 
 export async function analyticsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', authenticate);
 
-  // --- GET /api/analytics (Relatório Geral por Período) ---
-  app.get('/', async (request, reply) => {
-    const tenantId = request.user?.tenantId;
-    
-    const querySchema = z.object({
-        startDate: z.string().optional(), // YYYY-MM-DD
-        endDate: z.string().optional()    // YYYY-MM-DD
-    });
-
-    const { startDate, endDate } = querySchema.parse(request.query);
-
-    // Se não informar data, pega os últimos 30 dias por padrão
-    const end = endDate || new Date().toISOString().split('T')[0];
-    const start = startDate || new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0];
+  // GET /api/analytics/dashboard
+  app.get('/dashboard', async (request, reply) => {
+    const { tenantId } = request.user!;
 
     try {
-      // 1. Vendas Totais no Período (Status 'Ganho')
-      const salesRes = await db.query(`
-        SELECT 
-            COUNT(d.id) as count, 
-            COALESCE(SUM(d.value), 0) as total 
-        FROM deals d
-        JOIN stages s ON d.stage_id = s.id
-        WHERE d.tenant_id = $1 
-          AND s.name ILIKE '%Ganho%'
-          AND d.created_at BETWEEN $2 AND $3
-      `, [tenantId, start, end]);
+      const client = await db.getClient();
 
-      // 2. Ranking de Vendedores (Quem vendeu mais)
-      const rankingRes = await db.query(`
+      // 1. KPI: Total de Leads e Status
+      const leadsStats = await client.query(`
+        SELECT status, COUNT(*) as count 
+        FROM leads 
+        WHERE tenant_id = $1 
+        GROUP BY status
+      `, [tenantId]);
+
+      const leadCounts = {
+        new: 0,
+        in_progress: 0,
+        converted: 0,
+        lost: 0,
+        total: 0
+      };
+
+      leadsStats.rows.forEach(row => {
+        const count = Number(row.count);
+        if (row.status === 'new') leadCounts.new = count;
+        if (row.status === 'in_progress') leadCounts.in_progress = count;
+        if (row.status === 'converted') leadCounts.converted = count;
+        if (row.status === 'lost') leadCounts.lost = count;
+        leadCounts.total += count;
+      });
+
+      // 2. KPI: Financeiro (Propostas Aceitas vs Enviadas)
+      const financialStats = await client.query(`
+        SELECT status, SUM(total_amount) as total 
+        FROM proposals 
+        WHERE tenant_id = $1 
+        GROUP BY status
+      `, [tenantId]);
+
+      const revenue = {
+        sent: 0,      // Pipeline (Enviado)
+        accepted: 0,  // Receita Garantida
+        rejected: 0
+      };
+
+      financialStats.rows.forEach(row => {
+        const val = Number(row.total);
+        if (row.status === 'sent') revenue.sent = val;
+        if (row.status === 'accepted') revenue.accepted = val;
+        if (row.status === 'rejected') revenue.rejected = val;
+      });
+
+      // 3. Performance por Vendedor (Top 5)
+      // Agrega leads convertidos e tarefas concluídas
+      const agentsStats = await client.query(`
         SELECT 
+            u.id, 
             u.name,
-            COUNT(d.id) as deals_won,
-            COALESCE(SUM(d.value), 0) as total_value
-        FROM deals d
-        JOIN stages s ON d.stage_id = s.id
-        LEFT JOIN users u ON d.user_id = u.id
-        WHERE d.tenant_id = $1 
-          AND s.name ILIKE '%Ganho%'
-          AND d.created_at BETWEEN $2 AND $3
+            COUNT(DISTINCT l.id) FILTER (WHERE l.status = 'converted') as converted_leads,
+            COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'completed') as completed_tasks
+        FROM users u
+        LEFT JOIN leads l ON l.user_id = u.id AND l.tenant_id = $1
+        LEFT JOIN tasks t ON t.user_id = u.id AND t.tenant_id = $1
+        WHERE u.tenant_id = $1 AND u.role IN ('agent', 'admin', 'owner')
         GROUP BY u.id, u.name
-        ORDER BY total_value DESC
+        ORDER BY converted_leads DESC
         LIMIT 5
-      `, [tenantId, start, end]);
+      `, [tenantId]);
 
-      // 3. Taxa de Conversão (Leads criados vs Convertidos no período)
-      const leadsTotalRes = await db.query(`
-        SELECT COUNT(*) FROM leads 
-        WHERE tenant_id = $1 AND created_at BETWEEN $2 AND $3
-      `, [tenantId, start, end]);
-      
-      const leadsConvertedRes = await db.query(`
-        SELECT COUNT(*) FROM leads 
-        WHERE tenant_id = $1 AND status = 'converted' AND created_at BETWEEN $2 AND $3
-      `, [tenantId, start, end]);
+      client.release();
+
+      // Cálculos Finais
+      const conversionRate = leadCounts.total > 0 
+        ? ((leadCounts.converted / leadCounts.total) * 100).toFixed(1) 
+        : '0.0';
 
       return {
-        period: { start, end },
-        sales: {
-            count: Number(salesRes.rows[0].count),
-            value: Number(salesRes.rows[0].total)
-        },
-        sellers_ranking: rankingRes.rows,
-        conversion: {
-            total_leads: Number(leadsTotalRes.rows[0].count),
-            converted_leads: Number(leadsConvertedRes.rows[0].count)
-        }
+        leads: leadCounts,
+        revenue,
+        conversionRate,
+        agents: agentsStats.rows
       };
 
     } catch (error) {

@@ -18,14 +18,15 @@ import { proposalRoutes } from './routes/proposals';
 import { leadRoutes } from './routes/leads';
 import { webhookRoutes } from './routes/webhooks';
 import { analyticsRoutes } from './routes/analytics';
-import { adminRoutes } from './routes/admin';       // <--- Super Admin
-import { publicApiRoutes } from './routes/public_api'; // <--- Cadastro Automático
+import { adminRoutes } from './routes/admin';
+import { publicApiRoutes } from './routes/public_api';
+import { notificationRoutes } from './routes/notifications'; // <--- NOVA IMPORTAÇÃO
 
 dotenv.config();
 
 const server: FastifyInstance = Fastify({ logger: true });
 
-// Configuração do CORS (Permitindo PATCH)
+// Configuração do CORS
 server.register(cors, {
   origin: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -57,10 +58,9 @@ server.register(proposalRoutes, { prefix: '/api/proposals' });
 server.register(leadRoutes, { prefix: '/api/leads' });
 server.register(webhookRoutes, { prefix: '/api/webhooks' });
 server.register(analyticsRoutes, { prefix: '/api/analytics' });
-
-// Rotas Novas (Admin)
 server.register(adminRoutes, { prefix: '/api/admin' });
 server.register(publicApiRoutes, { prefix: '/api/public' });
+server.register(notificationRoutes, { prefix: '/api/notifications' }); // <--- REGISTRO
 
 const start = async () => {
   try {

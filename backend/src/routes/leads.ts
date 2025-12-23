@@ -8,10 +8,9 @@ export async function leadRoutes(app: FastifyInstance) {
   app.addHook('onRequest', authenticate);
 
   // ===========================================================================
-  // 1. LISTAGEM E FILTROS (AS 4 TELAS)
+  // 1. LISTAGEM E FILTROS
   // ===========================================================================
   
-  // GET /api/leads/pool
   app.get('/pool', async (request, reply) => {
     const { tenantId } = request.user!;
     try {
@@ -28,7 +27,6 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // GET /api/leads/mine
   app.get('/mine', async (request, reply) => {
     const { tenantId, userId } = request.user!;
     try {
@@ -45,7 +43,6 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // GET /api/leads/converted
   app.get('/converted', async (request, reply) => {
     const { tenantId } = request.user!;
     try {
@@ -61,7 +58,6 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // GET /api/leads/lost
   app.get('/lost', async (request, reply) => {
     const { tenantId } = request.user!;
     try {
@@ -76,12 +72,10 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // GET /api/leads/:id/logs (Histórico)
   app.get('/:id/logs', async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { tenantId } = request.user!;
     
-    // Verificação de segurança básica: O lead deve pertencer ao tenant
     const check = await db.query('SELECT id FROM leads WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
     if (check.rowCount === 0) return reply.status(404).send({ error: 'Lead not found' });
 
@@ -100,16 +94,14 @@ export async function leadRoutes(app: FastifyInstance) {
   });
 
   // ===========================================================================
-  // 2. AÇÕES DE FLUXO (PEGAR, CONVERTER, PERDER)
+  // 2. AÇÕES DE FLUXO
   // ===========================================================================
 
-  // POST /api/leads/:id/claim -> Vendedor "Pega" o Lead
   app.post('/:id/claim', async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { tenantId, userId } = request.user!;
 
     try {
-      // Tenta atualizar SOMENTE SE user_id for NULL
       const result = await db.query(`
         UPDATE leads 
         SET user_id = $1, status = 'in_progress', captured_at = NOW()
@@ -121,7 +113,6 @@ export async function leadRoutes(app: FastifyInstance) {
         return reply.status(409).send({ error: 'Este lead já foi pego ou não está disponível.' });
       }
 
-      // LOG
       await db.query(`INSERT INTO lead_logs (lead_id, user_id, action) VALUES ($1, $2, 'claimed')`, [id, userId]);
 
       return { message: 'Lead capturado com sucesso!', lead: result.rows[0] };
@@ -131,7 +122,6 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // POST /api/leads/:id/lose -> Marcar como Perdido
   app.post('/:id/lose', async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const bodySchema = z.object({ reason: z.string().min(1) });
@@ -155,7 +145,6 @@ export async function leadRoutes(app: FastifyInstance) {
       
       if (result.rowCount === 0) return reply.status(404).send({ error: 'Lead not found or permission denied' });
       
-      // LOG
       await db.query(`
         INSERT INTO lead_logs (lead_id, user_id, action, details) 
         VALUES ($1, $2, 'lost', $3)
@@ -167,7 +156,6 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // POST /api/leads/:id/convert -> Converter em Cliente
   app.post('/:id/convert', async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { tenantId, userId, role } = request.user!;
@@ -210,7 +198,6 @@ export async function leadRoutes(app: FastifyInstance) {
         WHERE id = $1
       `, [id]);
 
-      // LOG
       await client.query(`
          INSERT INTO lead_logs (lead_id, user_id, action, details) 
          VALUES ($1, $2, 'converted', $3)
@@ -234,15 +221,10 @@ export async function leadRoutes(app: FastifyInstance) {
   });
 
   // ===========================================================================
-  // 3. CRIAÇÃO E IMPORTAÇÃO (APENAS ADMIN/OWNER)
+  // 3. CRIAÇÃO E IMPORTAÇÃO
   // ===========================================================================
 
-  // POST /api/leads
   app.post('/', async (request, reply) => {
-    if (request.user?.role === 'agent') {
-        return reply.status(403).send({ error: 'Apenas administradores podem cadastrar leads.' });
-    }
-
     const createSchema = z.object({
       name: z.string().min(2),
       email: z.string().email().optional().or(z.literal('')),
@@ -257,31 +239,94 @@ export async function leadRoutes(app: FastifyInstance) {
     });
 
     const data = createSchema.parse(request.body);
-    const { tenantId } = request.user!;
+    const { tenantId, role } = request.user!;
+    const client = await db.getClient();
 
     try {
-      const result = await db.query(`
+      await client.query('BEGIN');
+
+      // 1. Check Round Robin Config
+      const tenantConfig = await client.query(
+        'SELECT round_robin_active FROM tenants WHERE id = $1', 
+        [tenantId]
+      );
+      const isRoundRobinActive = tenantConfig.rows[0]?.round_robin_active === true;
+
+      let assignedUserId = null;
+      let status = 'new';
+      let capturedAt = null;
+
+      // 2. Round Robin Logic
+      if (isRoundRobinActive) {
+        const agentRes = await client.query(`
+            SELECT id FROM users 
+            WHERE tenant_id = $1 
+              AND role IN ('agent', 'admin', 'owner') 
+            ORDER BY last_lead_assigned_at ASC NULLS FIRST
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        `, [tenantId]);
+
+        if (agentRes.rowCount && agentRes.rowCount > 0) {
+            assignedUserId = agentRes.rows[0].id;
+            status = 'in_progress';
+            capturedAt = new Date();
+
+            await client.query(`
+                UPDATE users SET last_lead_assigned_at = NOW() WHERE id = $1
+            `, [assignedUserId]);
+        }
+      }
+
+      // 3. Insert Lead
+      const result = await client.query(`
         INSERT INTO leads (
-            tenant_id, user_id, status, 
+            tenant_id, user_id, status, captured_at,
             name, email, phone, mobile, company_name, 
             position, website, address, source, notes
         )
-        VALUES ($1, NULL, 'new', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING *
       `, [
-        tenantId, data.name, data.email, data.phone, data.mobile, 
+        tenantId, assignedUserId, status, capturedAt,
+        data.name, data.email, data.phone, data.mobile, 
         data.company_name, data.position, data.website, data.address, 
         data.source, data.notes
       ]);
 
-      return reply.status(201).send(result.rows[0]);
+      const newLead = result.rows[0];
+
+      await client.query(`
+        INSERT INTO lead_logs (lead_id, user_id, action, details) 
+        VALUES ($1, $2, 'created', $3)
+      `, [newLead.id, request.user.userId, JSON.stringify({ source: 'manual', role })]);
+
+      // 4. NOTIFICATION & LOG (Se foi atribuído)
+      if (assignedUserId) {
+        await client.query(`
+            INSERT INTO lead_logs (lead_id, user_id, action, details) 
+            VALUES ($1, $2, 'claimed', $3)
+        `, [newLead.id, assignedUserId, JSON.stringify({ method: 'round_robin_auto' })]);
+
+        // CRIA NOTIFICAÇÃO PARA O VENDEDOR
+        await client.query(`
+            INSERT INTO notifications (tenant_id, user_id, title, message, link)
+            VALUES ($1, $2, 'Novo Lead Atribuído 🚀', 'Você recebeu um novo lead via distribuição automática.', '/dashboard/leads/mine')
+        `, [tenantId, assignedUserId]);
+      }
+
+      await client.query('COMMIT');
+      return reply.status(201).send(newLead);
+
     } catch (error) {
+      await client.query('ROLLBACK');
       console.error(error);
       return reply.status(500).send({ error: 'Failed to create lead' });
+    } finally {
+      client.release();
     }
   });
 
-  // POST /api/leads/import
   app.post('/import', async (request, reply) => {
     if (request.user?.role === 'agent') {
         return reply.status(403).send({ error: 'Apenas administradores podem importar leads.' });
@@ -348,11 +393,6 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // ===========================================================================
-  // 4. EDIÇÃO E REMOÇÃO
-  // ===========================================================================
-
-  // PUT /api/leads/:id
   app.put('/:id', async (request, reply) => {
     const { tenantId, role, userId } = request.user!;
     const paramsSchema = z.object({ id: z.string().uuid() });
@@ -407,7 +447,6 @@ export async function leadRoutes(app: FastifyInstance) {
     }
   });
 
-  // DELETE /api/leads/:id
   app.delete('/:id', async (request, reply) => {
       if (request.user?.role === 'agent') {
           return reply.status(403).send({ error: 'Vendedores não podem excluir leads.' });

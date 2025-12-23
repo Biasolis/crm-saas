@@ -1,0 +1,175 @@
+.container {
+  padding: 1rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header {
+  margin-bottom: 2rem;
+}
+
+.title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1f2937;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.subtitle {
+  color: #6b7280;
+  font-size: 0.95rem;
+  margin-top: 0.25rem;
+}
+
+/* KPI Cards Grid */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.kpiCard {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  display: flex;
+  flex-direction: column;
+}
+
+.kpiLabel {
+  font-size: 0.85rem;
+  color: #6b7280;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.kpiValue {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: #111827;
+}
+
+.kpiSub {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  margin-top: auto;
+  padding-top: 0.5rem;
+}
+
+/* Sections Grid (Funnel + Table) */
+.sectionsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+@media (max-width: 900px) {
+  .sectionsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sectionCard {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.sectionTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #374151;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+/* Visual Funnel */
+.funnelContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.funnelStep {
+  position: relative;
+  height: 40px;
+  background: #f3f4f6;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  padding: 0 1rem;
+  color: #374151;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.funnelBar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: #bfdbfe;
+  z-index: 1;
+  border-radius: 6px;
+  transition: width 1s ease-in-out;
+}
+
+.funnelLabel {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+}
+
+/* Table */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  text-align: left;
+  padding: 0.75rem 0.5rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.table td {
+  padding: 0.75rem 0.5rem;
+  font-size: 0.9rem;
+  color: #1f2937;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.agentName {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.avatar {
+  width: 24px;
+  height: 24px;
+  background: #e5e7eb;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4b5563;
+}

@@ -14,27 +14,30 @@ export async function taskRoutes(app: FastifyInstance) {
     const querySchema = z.object({
         status: z.enum(['pending', 'in_progress', 'completed', 'all']).default('pending'),
         lead_id: z.string().uuid().optional(),
-        contact_id: z.string().uuid().optional()
+        contact_id: z.string().uuid().optional(),
+        search: z.string().optional() // Novo filtro de busca
     });
     
-    const { status, lead_id, contact_id } = querySchema.parse(request.query);
+    const { status, lead_id, contact_id, search } = querySchema.parse(request.query);
 
     try {
       let queryText = `
-        SELECT t.*, c.name as contact_name, l.name as lead_name
+        SELECT t.*, c.name as contact_name, l.name as lead_name, u.name as user_name
         FROM tasks t
         LEFT JOIN contacts c ON t.contact_id = c.id
         LEFT JOIN leads l ON t.lead_id = l.id
+        LEFT JOIN users u ON t.user_id = u.id
         WHERE t.tenant_id = $1
       `;
       const values: any[] = [tenantId];
 
-      // Filtro de Segurança
+      // Filtro de Segurança (Agente vê apenas suas tarefas)
       if (isAgent) {
           queryText += ` AND t.user_id = $${values.length + 1}`;
           values.push(userId);
       }
 
+      // Filtros Opcionais
       if (status !== 'all') {
           queryText += ` AND t.status = $${values.length + 1}`;
           values.push(status);
@@ -48,6 +51,11 @@ export async function taskRoutes(app: FastifyInstance) {
       if (contact_id) {
           queryText += ` AND t.contact_id = $${values.length + 1}`;
           values.push(contact_id);
+      }
+
+      if (search) {
+          queryText += ` AND t.title ILIKE $${values.length + 1}`;
+          values.push(`%${search}%`);
       }
 
       queryText += ` ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC`;
@@ -70,6 +78,7 @@ export async function taskRoutes(app: FastifyInstance) {
       priority: z.enum(['low', 'medium', 'high']).default('medium'),
       contact_id: z.string().uuid().optional(),
       lead_id: z.string().uuid().optional(),
+      status: z.enum(['pending', 'in_progress', 'completed']).default('pending')
     });
 
     const data = createSchema.parse(request.body);
@@ -78,16 +87,16 @@ export async function taskRoutes(app: FastifyInstance) {
 
     try {
       const result = await db.query(`
-        INSERT INTO tasks (tenant_id, user_id, title, description, due_date, priority, contact_id, lead_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO tasks (tenant_id, user_id, title, description, due_date, priority, contact_id, lead_id, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING *
       `, [
         tenantId, userId, data.title, data.description || '', 
         data.due_date || null, data.priority, 
-        data.contact_id || null, data.lead_id || null
+        data.contact_id || null, data.lead_id || null, data.status
       ]);
 
-      // Log automático se for vinculada a um lead
+      // Log se for vinculado a Lead
       if (data.lead_id) {
         await db.query(`
             INSERT INTO lead_logs (lead_id, user_id, action, details)
@@ -124,17 +133,17 @@ export async function taskRoutes(app: FastifyInstance) {
     try {
       let query = `
         UPDATE tasks 
-        SET title = $1, description = $2, due_date = $3, priority = $4, contact_id = $5, lead_id = $6
-        WHERE id = $7 AND tenant_id = $8
+        SET title = $1, description = $2, due_date = $3, priority = $4, contact_id = $5, lead_id = $6, status = COALESCE($7, status)
+        WHERE id = $8 AND tenant_id = $9
       `;
       const params = [
         data.title, data.description || '', data.due_date || null, 
         data.priority, data.contact_id || null, data.lead_id || null, 
-        id, tenantId
+        data.status, id, tenantId
       ];
 
       if (isAgent) {
-          query += ' AND user_id = $9';
+          query += ' AND user_id = $10';
           params.push(userId);
       }
       query += ' RETURNING *';
@@ -193,7 +202,6 @@ export async function taskRoutes(app: FastifyInstance) {
         let query = 'DELETE FROM tasks WHERE id = $1 AND tenant_id = $2';
         const params = [id, tenantId];
 
-        // Vendedor só pode deletar SUAS tarefas
         if (isAgent) {
             query += ' AND user_id = $3';
             params.push(userId);

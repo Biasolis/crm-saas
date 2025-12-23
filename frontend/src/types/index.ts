@@ -51,4 +51,5 @@ export interface CreateLeadData {
   address?: string;
   source?: string;
   notes?: string;
+  auto_distribute?: boolean; // Novo campo para Round Robin
 }

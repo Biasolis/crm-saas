@@ -1,164 +1,198 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Users, DollarSign, TrendingUp, FileText, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
-} from 'recharts';
+  LayoutDashboard, Users, CalendarCheck, FileText, DollarSign, 
+  ArrowRight, Loader2, Target, Briefcase 
+} from 'lucide-react';
 import api from '@/services/api';
 import styles from './page.module.css';
 
-export default function DashboardPage() {
-  const [metrics, setMetrics] = useState({
-    total_contacts: 0,
-    pipeline_value: 0,
-    won_value: 0,
-    total_proposals: 0
-  });
-  
-  const [chartsData, setChartsData] = useState({
-    salesByMonth: [],
-    dealsByStage: []
-  });
+interface DashboardSummary {
+  stats: {
+    active_leads: number;
+    pending_tasks: number;
+    open_proposals: number;
+    pipeline_value: number;
+  };
+  agenda: Array<{
+    id: string;
+    title: string;
+    due_date: string;
+    priority: 'low' | 'medium' | 'high';
+  }>;
+  recent_leads: Array<{
+    id: string;
+    name: string;
+    company_name: string;
+    status: string;
+    created_at: string;
+  }>;
+}
 
-  const [isLoading, setIsLoading] = useState(true);
+export default function DashboardPage() {
+  const [data, setData] = useState<DashboardSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [userName, setUserName] = useState('Usuário');
 
   useEffect(() => {
-    async function loadData() {
+    // Pega nome do usuário do cache
+    const cachedUser = localStorage.getItem('crm_user');
+    if (cachedUser) {
+        try { setUserName(JSON.parse(cachedUser).name.split(' ')[0]); } catch (e) {}
+    }
+
+    async function loadDashboard() {
       try {
-        const [summaryRes, chartsRes] = await Promise.all([
-          api.get('/api/dashboard/summary'),
-          api.get('/api/dashboard/charts')
-        ]);
-        
-        setMetrics(summaryRes.data);
-        setChartsData(chartsRes.data);
+        const res = await api.get('/api/dashboard/summary');
+        setData(res.data);
       } catch (error) {
         console.error('Erro ao carregar dashboard', error);
       } finally {
-        setIsLoading(false);
+        setLoading(false);
       }
     }
-    loadData();
+    loadDashboard();
   }, []);
 
-  if (isLoading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '3rem' }}>
-        <Loader2 className="animate-spin" size={32} />
-      </div>
-    );
-  }
+  if (loading) return <div style={{display:'flex', justifyContent:'center', padding:'4rem'}}><Loader2 className="animate-spin" /></div>;
+  if (!data) return <div style={{padding:'2rem'}}>Erro ao carregar dados.</div>;
 
-  // Cards de Resumo
-  const cards = [
-    { 
-      title: 'Total de Clientes', 
-      value: metrics.total_contacts, 
-      icon: Users, 
-      color: '#2563eb',
-      format: (v: number) => v 
-    },
-    { 
-      title: 'Em Negociação', 
-      value: metrics.pipeline_value, 
-      icon: TrendingUp, 
-      color: '#f59e0b',
-      format: (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v)
-    },
-    { 
-      title: 'Vendas (Total)', 
-      value: metrics.won_value, 
-      icon: DollarSign, 
-      color: '#22c55e',
-      format: (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v)
-    },
-    { 
-      title: 'Propostas Geradas', 
-      value: metrics.total_proposals, 
-      icon: FileText, 
-      color: '#8b5cf6',
-      format: (v: number) => v
-    },
-  ];
+  const today = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
 
-  // Cores para o gráfico de Pizza
-  const PIE_COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
+  // Helpers
+  const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
   return (
-    <div>
-      <div className={styles.welcomeSection}>
-        <h2 className={styles.welcomeTitle}>Visão Geral</h2>
-        <p className={styles.welcomeText}>Acompanhe a saúde do seu negócio em tempo real.</p>
+    <div className={styles.container}>
+      
+      {/* HEADER */}
+      <div className={styles.header}>
+        <div>
+            <h1 className={styles.welcomeTitle}>Olá, {userName}! 👋</h1>
+            <p className={styles.dateText}>{today}</p>
+        </div>
       </div>
 
-      {/* Grid de Cards */}
-      <div className={styles.grid}>
-        {cards.map((card, index) => {
-          const Icon = card.icon;
-          return (
-            <div key={index} className={styles.card}>
-              <div className={styles.cardHeader}>
-                <span className={styles.cardTitle}>{card.title}</span>
-                <div style={{ backgroundColor: `${card.color}20`, padding: '8px', borderRadius: '8px', color: card.color }}>
-                  <Icon size={20} />
-                </div>
-              </div>
-              <div className={styles.cardValue}>
-                {card.format(Number(card.value))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Seção de Gráficos */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1.5rem', marginTop: '2rem' }}>
+      {/* KPI CARDS */}
+      <div className={styles.statsGrid}>
         
-        {/* Gráfico 1: Vendas por Mês */}
-        <div className={styles.card} style={{ minHeight: '350px', display: 'flex', flexDirection: 'column' }}>
-          <h3 style={{ marginBottom: '1.5rem', fontSize: '1.1rem', fontWeight: 600 }}>Volume de Negócios (6 Meses)</h3>
-          <div style={{ flex: 1, width: '100%', minHeight: '250px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartsData.salesByMonth}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="name" fontSize={12} />
-                <YAxis fontSize={12} />
-                <Tooltip 
-                    formatter={(value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value))}
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' }}
-                />
-                <Bar dataKey="value" fill="#2563eb" radius={[4, 4, 0, 0]} barSize={40} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+        <div className={styles.statCard}>
+            <div className={styles.iconWrapper} style={{background: '#dbeafe', color: '#2563eb'}}>
+                <Target size={24} />
+            </div>
+            <div className={styles.statInfo}>
+                <span className={styles.statValue}>{data.stats.active_leads}</span>
+                <span className={styles.statLabel}>Leads Ativos</span>
+            </div>
         </div>
 
-        {/* Gráfico 2: Funil */}
-        <div className={styles.card} style={{ minHeight: '350px', display: 'flex', flexDirection: 'column' }}>
-          <h3 style={{ marginBottom: '1.5rem', fontSize: '1.1rem', fontWeight: 600 }}>Distribuição do Funil</h3>
-          <div style={{ flex: 1, width: '100%', minHeight: '250px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={chartsData.dealsByStage}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {chartsData.dealsByStage.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend verticalAlign="bottom" height={36} iconType="circle" />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+        <div className={styles.statCard}>
+            <div className={styles.iconWrapper} style={{background: '#fef3c7', color: '#d97706'}}>
+                <CalendarCheck size={24} />
+            </div>
+            <div className={styles.statInfo}>
+                <span className={styles.statValue}>{data.stats.pending_tasks}</span>
+                <span className={styles.statLabel}>Tarefas Pendentes</span>
+            </div>
+        </div>
+
+        <div className={styles.statCard}>
+            <div className={styles.iconWrapper} style={{background: '#e0e7ff', color: '#4338ca'}}>
+                <FileText size={24} />
+            </div>
+            <div className={styles.statInfo}>
+                <span className={styles.statValue}>{data.stats.open_proposals}</span>
+                <span className={styles.statLabel}>Propostas Abertas</span>
+            </div>
+        </div>
+
+        <div className={styles.statCard}>
+            <div className={styles.iconWrapper} style={{background: '#dcfce7', color: '#166534'}}>
+                <DollarSign size={24} />
+            </div>
+            <div className={styles.statInfo}>
+                <span className={styles.statValue} style={{fontSize: '1.2rem'}}>
+                    {formatCurrency(data.stats.pipeline_value)}
+                </span>
+                <span className={styles.statLabel}>Em Negociação</span>
+            </div>
+        </div>
+
+      </div>
+
+      {/* CONTENT GRID */}
+      <div className={styles.contentGrid}>
+        
+        {/* AGENDA */}
+        <div className={styles.sectionCard}>
+            <div className={styles.cardHeader}>
+                <div className={styles.cardTitle}><CalendarCheck size={18} /> Minha Agenda</div>
+                <Link href="/dashboard/tasks" className={styles.viewAllLink}>Ver todas</Link>
+            </div>
+            <div className={styles.cardBody}>
+                {data.agenda.length === 0 ? (
+                    <div className={styles.emptyState}>Sem tarefas pendentes. 🎉</div>
+                ) : (
+                    <div className={styles.agendaList}>
+                        {data.agenda.map(task => (
+                            <div key={task.id} className={`${styles.agendaItem} ${styles[task.priority]}`}>
+                                <div className={styles.agendaTime}>
+                                    {task.due_date ? new Date(task.due_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--'}
+                                </div>
+                                <div className={styles.agendaContent}>
+                                    <h4>{task.title}</h4>
+                                    {task.due_date && (
+                                        <p>{new Date(task.due_date).toLocaleDateString()}</p>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+
+        {/* LEADS RECENTES */}
+        <div className={styles.sectionCard}>
+            <div className={styles.cardHeader}>
+                <div className={styles.cardTitle}><Users size={18} /> Leads Recentes</div>
+                <Link href="/dashboard/leads" className={styles.viewAllLink}>Ver funil</Link>
+            </div>
+            <div className={styles.cardBody} style={{padding: 0}}>
+                {data.recent_leads.length === 0 ? (
+                    <div className={styles.emptyState}>Nenhum lead recente.</div>
+                ) : (
+                    <table className={styles.table}>
+                        <thead>
+                            <tr>
+                                <th>Nome / Empresa</th>
+                                <th>Status</th>
+                                <th>Data</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {data.recent_leads.map(lead => (
+                                <tr key={lead.id}>
+                                    <td>
+                                        <div style={{fontWeight: 600, color: '#374151'}}>{lead.name}</div>
+                                        {lead.company_name && <div style={{fontSize: '0.8rem', color: '#6b7280'}}>{lead.company_name}</div>}
+                                    </td>
+                                    <td>
+                                        <span className={`${styles.statusBadge} ${styles[lead.status]}`}>
+                                            {lead.status === 'in_progress' ? 'Em Andamento' : lead.status === 'new' ? 'Novo' : lead.status}
+                                        </span>
+                                    </td>
+                                    <td style={{fontSize: '0.85rem', color: '#6b7280'}}>
+                                        {new Date(lead.created_at).toLocaleDateString()}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+            </div>
         </div>
 
       </div>

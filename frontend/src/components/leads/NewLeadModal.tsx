@@ -12,6 +12,7 @@ interface Props {
 
 export default function NewLeadModal({ isOpen, onClose, onSuccess }: Props) {
   const [loading, setLoading] = useState(false);
+  
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -27,11 +28,24 @@ export default function NewLeadModal({ isOpen, onClose, onSuccess }: Props) {
     e.preventDefault();
     setLoading(true);
     try {
+      // O backend agora consulta as configs da empresa para decidir se distribui ou não
       await leadsService.create(formData);
+      
       alert('Lead criado com sucesso!');
       onSuccess();
       onClose();
+      
+      // Reset form
+      setFormData({
+        name: '',
+        email: '',
+        phone: '',
+        company_name: '',
+        position: '',
+        notes: ''
+      });
     } catch (error) {
+      console.error(error);
       alert('Erro ao criar lead.');
     } finally {
       setLoading(false);
@@ -54,6 +68,7 @@ export default function NewLeadModal({ isOpen, onClose, onSuccess }: Props) {
               className={styles.input}
               value={formData.name}
               onChange={e => setFormData({...formData, name: e.target.value})}
+              placeholder="Ex: João Silva"
             />
           </div>
 
@@ -65,6 +80,7 @@ export default function NewLeadModal({ isOpen, onClose, onSuccess }: Props) {
                 className={styles.input}
                 value={formData.email}
                 onChange={e => setFormData({...formData, email: e.target.value})}
+                placeholder="joao@empresa.com"
               />
             </div>
             <div className={styles.formGroup}>
@@ -73,6 +89,7 @@ export default function NewLeadModal({ isOpen, onClose, onSuccess }: Props) {
                 className={styles.input}
                 value={formData.phone}
                 onChange={e => setFormData({...formData, phone: e.target.value})}
+                placeholder="(11) 99999-9999"
               />
             </div>
           </div>
@@ -84,6 +101,7 @@ export default function NewLeadModal({ isOpen, onClose, onSuccess }: Props) {
                 className={styles.input}
                 value={formData.company_name}
                 onChange={e => setFormData({...formData, company_name: e.target.value})}
+                placeholder="Empresa LTDA"
               />
             </div>
             <div className={styles.formGroup}>
@@ -92,6 +110,7 @@ export default function NewLeadModal({ isOpen, onClose, onSuccess }: Props) {
                 className={styles.input}
                 value={formData.position}
                 onChange={e => setFormData({...formData, position: e.target.value})}
+                placeholder="Gerente de Compras"
               />
             </div>
           </div>
@@ -102,6 +121,7 @@ export default function NewLeadModal({ isOpen, onClose, onSuccess }: Props) {
               className={styles.textarea}
               value={formData.notes}
               onChange={e => setFormData({...formData, notes: e.target.value})}
+              placeholder="Detalhes iniciais..."
             />
           </div>
 

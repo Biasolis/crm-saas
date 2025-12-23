@@ -3,116 +3,101 @@ import { db } from '../db/client';
 import { authenticate } from '../middleware/auth';
 
 export async function dashboardRoutes(app: FastifyInstance) {
-  // Garante que apenas usuários logados acessem e pega o tenant_id do token
   app.addHook('onRequest', authenticate);
 
-  // --- Rota 1: Resumo Numérico (Cards) ---
+  // GET /api/dashboard/summary
   app.get('/summary', async (request, reply) => {
-    const { tenantId, role, userId } = request.user!;
+    const { tenantId, userId, role } = request.user!;
     const isAgent = role === 'agent';
 
     try {
-      // Filtros de Segurança
-      const params = [tenantId];
-      let userFilter = '';
-      
-      // Se for agente, adiciona filtro de usuário e o ID dele nos parâmetros
+      const client = await db.getClient();
+
+      // 1. STATS: Contadores Rápidos
+      // Leads (Ativos)
+      let leadsCountQuery = `SELECT COUNT(*) FROM leads WHERE tenant_id = $1 AND status IN ('new', 'in_progress')`;
+      const leadsCountParams: any[] = [tenantId];
       if (isAgent) {
-        userFilter = 'AND user_id = $2';
-        params.push(userId);
+        leadsCountQuery += ` AND user_id = $2`;
+        leadsCountParams.push(userId);
       }
+      const leadsRes = await client.query(leadsCountQuery, leadsCountParams);
 
-      // 1. Total de Clientes
-      const contactsRes = await db.query(
-        `SELECT COUNT(*) FROM contacts WHERE tenant_id = $1 ${userFilter}`,
-        params
-      );
+      // Tarefas (Pendentes)
+      let tasksCountQuery = `SELECT COUNT(*) FROM tasks WHERE tenant_id = $1 AND status = 'pending'`;
+      const tasksCountParams: any[] = [tenantId];
+      if (isAgent) {
+        tasksCountQuery += ` AND user_id = $2`;
+        tasksCountParams.push(userId);
+      }
+      const tasksRes = await client.query(tasksCountQuery, tasksCountParams);
 
-      // 2. Valor em Negociação (Pipeline Aberto)
-      const openDealsRes = await db.query(`
-        SELECT SUM(d.value) as total 
-        FROM deals d
-        JOIN stages s ON d.stage_id = s.id
-        WHERE d.tenant_id = $1 
-        AND s.name NOT ILIKE '%Ganho%' 
-        AND s.name NOT ILIKE '%Perdido%'
-        ${isAgent ? 'AND d.user_id = $2' : ''}
-      `, params);
+      // Propostas (Em aberto: Draft ou Sent)
+      let proposalsCountQuery = `SELECT COUNT(*) FROM proposals WHERE tenant_id = $1 AND status IN ('draft', 'sent')`;
+      const proposalsCountParams: any[] = [tenantId];
+      if (isAgent) {
+        proposalsCountQuery += ` AND user_id = $2`;
+        proposalsCountParams.push(userId);
+      }
+      const proposalsRes = await client.query(proposalsCountQuery, proposalsCountParams);
 
-      // 3. Vendas Realizadas (Ganho)
-      const wonDealsRes = await db.query(`
-        SELECT SUM(d.value) as total 
-        FROM deals d
-        JOIN stages s ON d.stage_id = s.id
-        WHERE d.tenant_id = $1 AND s.name ILIKE '%Ganho%'
-        ${isAgent ? 'AND d.user_id = $2' : ''}
-      `, params);
+      // Valor em Pipeline (Deals ou Propostas enviadas)
+      // Vamos usar propostas enviadas como base de "Valor em Negociação"
+      let pipelineValueQuery = `SELECT SUM(total_amount) FROM proposals WHERE tenant_id = $1 AND status = 'sent'`;
+      const pipelineParams: any[] = [tenantId];
+      if (isAgent) {
+        pipelineValueQuery += ` AND user_id = $2`;
+        pipelineParams.push(userId);
+      }
+      const pipelineRes = await client.query(pipelineValueQuery, pipelineParams);
 
-      // 4. Propostas Enviadas (Total)
-      const proposalsRes = await db.query(
-        `SELECT COUNT(*) FROM proposals WHERE tenant_id = $1 ${userFilter}`, 
-        params
-      );
 
-      return {
-        total_contacts: Number(contactsRes.rows[0].count),
-        pipeline_value: Number(openDealsRes.rows[0].total) || 0,
-        won_value: Number(wonDealsRes.rows[0].total) || 0,
-        total_proposals: Number(proposalsRes.rows[0].count)
-      };
+      // 2. LISTAS: Agenda e Leads Recentes
+      
+      // Minha Agenda (Próximas 5 tarefas pendentes, ordenadas por data)
+      let agendaQuery = `
+        SELECT id, title, due_date, priority 
+        FROM tasks 
+        WHERE tenant_id = $1 AND status = 'pending'
+      `;
+      const agendaParams: any[] = [tenantId];
+      if (isAgent) {
+        agendaQuery += ` AND user_id = $2`;
+        agendaParams.push(userId);
+      }
+      agendaQuery += ` ORDER BY due_date ASC NULLS LAST LIMIT 5`;
+      const agendaRes = await client.query(agendaQuery, agendaParams);
 
-    } catch (error) {
-      console.error(error);
-      return reply.status(500).send({ error: 'Failed to load dashboard metrics' });
-    }
-  });
-
-  // --- Rota 2: Dados para Gráficos (Analytics) ---
-  app.get('/charts', async (request, reply) => {
-    const { tenantId, role, userId } = request.user!;
-    const isAgent = role === 'agent';
-
-    try {
-      const params = [tenantId];
-      if (isAgent) params.push(userId);
-
-      // Gráfico 1: Volume de Vendas/Negócios por Mês
-      const salesRes = await db.query(`
-        SELECT 
-          TO_CHAR(created_at, 'Mon') as name,
-          SUM(value) as value
-        FROM deals
+      // Leads Recentes (Últimos 5)
+      let recentLeadsQuery = `
+        SELECT id, name, company_name, status, created_at 
+        FROM leads 
         WHERE tenant_id = $1
-        ${isAgent ? 'AND user_id = $2' : ''}
-        GROUP BY TO_CHAR(created_at, 'Mon'), DATE_TRUNC('month', created_at)
-        ORDER BY DATE_TRUNC('month', created_at) DESC
-        LIMIT 6
-      `, params);
+      `;
+      const recentLeadsParams: any[] = [tenantId];
+      if (isAgent) {
+        recentLeadsQuery += ` AND user_id = $2`;
+        recentLeadsParams.push(userId);
+      }
+      recentLeadsQuery += ` ORDER BY created_at DESC LIMIT 5`;
+      const recentLeadsRes = await client.query(recentLeadsQuery, recentLeadsParams);
 
-      const salesByMonth = salesRes.rows.reverse();
-
-      // Gráfico 2: Distribuição do Funil
-      // Nota: Stages são globais do tenant, mas contamos apenas os deals do usuário se for agent
-      const funnelRes = await db.query(`
-        SELECT 
-          s.name, 
-          COUNT(d.id) as value
-        FROM stages s
-        LEFT JOIN deals d ON s.id = d.stage_id ${isAgent ? 'AND d.user_id = $2' : ''}
-        JOIN pipelines p ON s.pipeline_id = p.id
-        WHERE p.tenant_id = $1
-        GROUP BY s.name, s."order"
-        ORDER BY s."order" ASC
-      `, params);
+      client.release();
 
       return {
-        salesByMonth,
-        dealsByStage: funnelRes.rows
+        stats: {
+            active_leads: parseInt(leadsRes.rows[0].count),
+            pending_tasks: parseInt(tasksRes.rows[0].count),
+            open_proposals: parseInt(proposalsRes.rows[0].count),
+            pipeline_value: parseFloat(pipelineRes.rows[0].sum || '0')
+        },
+        agenda: agendaRes.rows,
+        recent_leads: recentLeadsRes.rows
       };
 
     } catch (error) {
       console.error(error);
-      return reply.status(500).send({ error: 'Failed to fetch charts data' });
+      return reply.status(500).send({ error: 'Failed to load dashboard' });
     }
   });
 }

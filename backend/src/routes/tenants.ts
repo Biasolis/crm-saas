@@ -1,12 +1,11 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { db } from '../db/client';
-import { authenticate } from '../middleware/auth'; // <--- Importação Crítica
+import { authenticate } from '../middleware/auth';
 
 export async function tenantRoutes(app: FastifyInstance) {
   
-  // --- Rotas Públicas (Criação de Conta / Admin) ---
-  
+  // --- Rotas Públicas ---
   app.post('/', async (request, reply) => {
     const createTenantBody = z.object({
       name: z.string().min(3),
@@ -38,13 +37,11 @@ export async function tenantRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- Rotas Protegidas (Requer Login) ---
-  
+  // --- Rotas Protegidas ---
   app.register(async (protectedRoutes) => {
-    // AQUI ESTAVA O ERRO: Se authenticate for undefined, o servidor cai.
     protectedRoutes.addHook('onRequest', authenticate);
 
-    // GET /api/tenants/current -> Pega dados da empresa do usuário logado
+    // GET /api/tenants/current
     protectedRoutes.get('/current', async (request, reply) => {
       const tenantId = request.user?.tenantId;
       try {
@@ -60,7 +57,7 @@ export async function tenantRoutes(app: FastifyInstance) {
       }
     });
 
-    // PUT /api/tenants/current -> Atualiza Branding
+    // PUT /api/tenants/current
     protectedRoutes.put('/current', async (request, reply) => {
       const tenantId = request.user?.tenantId;
       
@@ -72,6 +69,8 @@ export async function tenantRoutes(app: FastifyInstance) {
         logo_url: z.string().url().optional().or(z.literal('')),
         chatwoot_url: z.string().url().optional().or(z.literal('')),
         chatwoot_access_token: z.string().optional().or(z.literal('')),
+        // Novo campo
+        round_robin_active: z.boolean().optional()
       });
 
       const data = updateSchema.parse(request.body);

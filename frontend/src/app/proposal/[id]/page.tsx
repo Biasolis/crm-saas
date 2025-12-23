@@ -2,197 +2,225 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
-import { Loader2, Printer, CheckCircle, XCircle, Calendar, Mail } from 'lucide-react';
-import api from '@/services/api';
-import styles from './page.module.css'; // Vamos criar esse CSS abaixo
+import { CheckCircle2, XCircle, Download, Loader2, Calendar, FileText, Building2 } from 'lucide-react';
+import styles from './page.module.css';
+
+// URL da API (Fallback para localhost se não definido)
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 interface ProposalItem {
+  id: string;
   description: string;
   quantity: number;
-  unit_price: string; // Vem como string do banco
-  total_price: string;
+  unit_price: number;
+  total_price: number;
 }
 
-interface PublicProposal {
+interface ProposalData {
   id: string;
   title: string;
+  status: 'draft' | 'sent' | 'accepted' | 'rejected';
+  total_amount: number;
+  valid_until?: string;
+  notes?: string;
   created_at: string;
-  valid_until: string | null;
-  total_amount: string;
-  notes: string | null;
-  status: string;
-  
-  // Branding e Dados do Tenant
   tenant_name: string;
-  tenant_logo: string | null;
-  tenant_color: string;
-  company_legal_name: string | null;
-  company_document: string | null;
-  
-  // Cliente
-  contact_name: string;
-  contact_email: string;
-  
+  tenant_logo?: string;
+  tenant_color?: string;
+  tenant_email?: string;
+  contact_name?: string;
+  user_name?: string;
   items: ProposalItem[];
 }
 
 export default function PublicProposalPage() {
   const params = useParams();
-  const [proposal, setProposal] = useState<PublicProposal | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const id = params.id as string;
+  
+  const [data, setData] = useState<ProposalData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
-    async function load() {
+    async function loadProposal() {
       try {
-        // Usamos api.get mas sem o token (a rota é pública)
-        // O axios interceptor manda o token se tiver, mas aqui não atrapalha
-        const res = await api.get(`/api/proposals/${params.id}/public`);
-        setProposal(res.data);
-      } catch (error) {
-        console.error(error);
+        // Fetch direto sem interceptors de auth
+        const res = await fetch(`${API_URL}/api/proposals/${id}/public`);
+        if (!res.ok) throw new Error('Proposta não encontrada ou expirada.');
+        const json = await res.json();
+        setData(json);
+      } catch (err) {
+        setError('Não foi possível carregar a proposta.');
       } finally {
-        setIsLoading(false);
+        setLoading(false);
       }
     }
-    load();
-  }, [params.id]);
+    if (id) loadProposal();
+  }, [id]);
 
-  if (isLoading) return <div className={styles.loading}><Loader2 className="animate-spin" /></div>;
-  if (!proposal) return <div className={styles.error}>Proposta não encontrada ou expirada.</div>;
+  async function handleAction(action: 'accept' | 'reject') {
+    if (!confirm(action === 'accept' ? 'Deseja aprovar este orçamento?' : 'Deseja rejeitar este orçamento?')) return;
+    
+    setActionLoading(true);
+    try {
+        const res = await fetch(`${API_URL}/api/proposals/${id}/public/${action}`, { method: 'POST' });
+        if (!res.ok) throw new Error('Erro ao processar ação');
+        
+        // Atualiza estado local
+        setData(prev => prev ? { ...prev, status: action === 'accept' ? 'accepted' : 'rejected' } : null);
+        alert(action === 'accept' ? 'Obrigado! Proposta aprovada com sucesso.' : 'Proposta rejeitada.');
+    } catch (error) {
+        alert('Erro de conexão. Tente novamente.');
+    } finally {
+        setActionLoading(false);
+    }
+  }
 
-  // Aplica cor do tenant dinamicamente
-  const primaryColor = proposal.tenant_color || '#000000';
+  if (loading) return <div className={styles.loading}><Loader2 className="animate-spin" size={32} /></div>;
+  if (error || !data) return <div className={styles.errorContainer}><h3>{error || '404 - Proposta não encontrada'}</h3></div>;
+
+  // Customização de Cor
+  const primaryColor = data.tenant_color || '#2563eb';
 
   return (
-    <div className={styles.wrapper}>
+    <div className={styles.container}>
       
-      {/* Barra de Ações (Fixo no topo) */}
-      <div className={styles.topBar}>
-        <div className={styles.statusBadge}>
-          Status: <strong>{proposal.status === 'draft' ? 'Pendente' : proposal.status}</strong>
-        </div>
-        <div className={styles.actions}>
-          <button className={styles.printButton} onClick={() => window.print()}>
-            <Printer size={18} /> Imprimir / Salvar PDF
-          </button>
-          <button 
-            className={styles.acceptButton}
-            style={{ backgroundColor: primaryColor }}
-            onClick={() => alert('Em breve: Aceite Digital!')}
-          >
-            <CheckCircle size={18} /> Aprovar Proposta
-          </button>
-        </div>
-      </div>
-
-      {/* Folha A4 da Proposta */}
-      <div className={styles.paper}>
-        
-        {/* Cabeçalho */}
-        <header className={styles.header}>
-          <div className={styles.brand}>
-            {proposal.tenant_logo ? (
-              <img src={proposal.tenant_logo} alt="Logo" className={styles.logo} />
+      {/* HEADER DA EMPRESA */}
+      <header className={styles.header}>
+        <div className={styles.brand}>
+            {data.tenant_logo ? (
+                <img src={data.tenant_logo} alt="Logo" className={styles.logo} />
             ) : (
-              <div className={styles.logoPlaceholder} style={{ backgroundColor: primaryColor }}>
-                {proposal.tenant_name.charAt(0)}
-              </div>
+                <div className={styles.logoPlaceholder} style={{ background: primaryColor }}>
+                    <Building2 color="white" size={24} />
+                </div>
             )}
-            <div className={styles.companyInfo}>
-              <h1 className={styles.companyName}>{proposal.tenant_name}</h1>
-              <p>{proposal.company_legal_name}</p>
-              <p>{proposal.company_document}</p>
+            <div>
+                <h2 className={styles.companyName}>{data.tenant_name}</h2>
+                <div className={styles.meta}>Proposta #{data.id.slice(0, 8).toUpperCase()}</div>
             </div>
-          </div>
-          
-          <div className={styles.proposalMeta}>
-            <h2 style={{ color: primaryColor }}>PROPOSTA</h2>
-            <p>#{proposal.id.slice(0, 8).toUpperCase()}</p>
-            <div className={styles.metaRow}>
-              <Calendar size={14} /> 
-              {new Date(proposal.created_at).toLocaleDateString()}
+        </div>
+        
+        <div className={styles.statusBadge} data-status={data.status}>
+            {data.status === 'accepted' ? 'APROVADA' : data.status === 'rejected' ? 'REJEITADA' : 'AGUARDANDO APROVAÇÃO'}
+        </div>
+      </header>
+
+      {/* DETALHES PRINCIPAIS */}
+      <main className={styles.paper}>
+        <div className={styles.topInfo}>
+            <div>
+                <h1 className={styles.title}>{data.title}</h1>
+                <p className={styles.clientInfo}>
+                    Preparado para: <strong>{data.contact_name || 'Cliente'}</strong>
+                </p>
+                <p className={styles.dateInfo}>
+                    <Calendar size={14} /> Data: {new Date(data.created_at).toLocaleDateString()}
+                    {data.valid_until && ` • Válida até: ${new Date(data.valid_until).toLocaleDateString()}`}
+                </p>
             </div>
-            {proposal.valid_until && (
-              <div className={styles.metaRow} style={{ color: '#ef4444' }}>
-                Válido até: {new Date(proposal.valid_until).toLocaleDateString()}
-              </div>
+            {data.user_name && (
+                <div className={styles.consultant}>
+                    <small>Consultor Responsável:</small>
+                    <strong>{data.user_name}</strong>
+                </div>
             )}
-          </div>
-        </header>
+        </div>
 
-        <hr className={styles.divider} style={{ borderColor: primaryColor }} />
+        {/* TABELA DE ITENS */}
+        <div className={styles.tableContainer}>
+            <table className={styles.table}>
+                <thead>
+                    <tr>
+                        <th>Descrição</th>
+                        <th style={{textAlign: 'center'}}>Qtd</th>
+                        <th style={{textAlign: 'right'}}>Preço Unit.</th>
+                        <th style={{textAlign: 'right'}}>Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {data.items.map((item) => (
+                        <tr key={item.id}>
+                            <td>{item.description}</td>
+                            <td style={{textAlign: 'center'}}>{item.quantity}</td>
+                            <td style={{textAlign: 'right'}}>
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(item.unit_price))}
+                            </td>
+                            <td style={{textAlign: 'right', fontWeight: 600}}>
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(item.total_price))}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colSpan={3} className={styles.totalLabel}>Total Geral</td>
+                        <td className={styles.totalValue} style={{ color: primaryColor }}>
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(data.total_amount))}
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
 
-        {/* Cliente e Título */}
-        <section className={styles.intro}>
-          <div className={styles.clientBox}>
-            <span className={styles.label}>Preparado para:</span>
-            <h3 className={styles.clientName}>{proposal.contact_name || 'Cliente'}</h3>
-            {proposal.contact_email && (
-              <div className={styles.metaRow}>
-                <Mail size={14} /> {proposal.contact_email}
-              </div>
-            )}
-          </div>
-          <div className={styles.projectBox}>
-            <span className={styles.label}>Projeto / Referência:</span>
-            <h3 className={styles.projectTitle}>{proposal.title}</h3>
-          </div>
-        </section>
-
-        {/* Tabela de Itens */}
-        <section className={styles.itemsSection}>
-          <table className={styles.table}>
-            <thead style={{ backgroundColor: primaryColor, color: 'white' }}>
-              <tr>
-                <th>Descrição</th>
-                <th style={{ textAlign: 'center' }}>Qtd</th>
-                <th style={{ textAlign: 'right' }}>Valor Unit.</th>
-                <th style={{ textAlign: 'right' }}>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {proposal.items.map((item, index) => (
-                <tr key={index}>
-                  <td>{item.description}</td>
-                  <td style={{ textAlign: 'center' }}>{item.quantity}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(item.unit_price))}
-                  </td>
-                  <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(item.total_price))}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-
-        {/* Totais */}
-        <section className={styles.totalSection}>
-          <div className={styles.totalRow}>
-            <span>Subtotal</span>
-            <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(proposal.total_amount))}</span>
-          </div>
-          <div className={styles.totalRowFinal} style={{ color: primaryColor }}>
-            <span>Total Geral</span>
-            <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(proposal.total_amount))}</span>
-          </div>
-        </section>
-
-        {/* Observações */}
-        {proposal.notes && (
-          <section className={styles.notes}>
-            <h4>Observações e Condições:</h4>
-            <p>{proposal.notes}</p>
-          </section>
+        {/* NOTAS */}
+        {data.notes && (
+            <div className={styles.notesSection}>
+                <h3>Notas e Observações</h3>
+                <p>{data.notes}</p>
+            </div>
         )}
 
-        {/* Rodapé */}
-        <footer className={styles.footer}>
-          <p>Este documento foi gerado eletronicamente por <strong>CRM SaaS</strong>.</p>
-        </footer>
+        {/* ÁREA DE AÇÃO (SÓ APARECE SE AINDA NÃO FOI RESPONDIDA) */}
+        {(data.status === 'draft' || data.status === 'sent') ? (
+            <div className={styles.actionArea}>
+                <button 
+                    onClick={() => handleAction('reject')} 
+                    disabled={actionLoading}
+                    className={styles.btnReject}
+                >
+                    <XCircle size={20} /> Rejeitar
+                </button>
+                <button 
+                    onClick={() => handleAction('accept')} 
+                    disabled={actionLoading}
+                    className={styles.btnAccept}
+                    style={{ backgroundColor: primaryColor }}
+                >
+                    {actionLoading ? <Loader2 className="animate-spin" /> : <><CheckCircle2 size={20} /> Aprovar Orçamento</>}
+                </button>
+            </div>
+        ) : (
+            <div className={styles.finalStatus} style={{ 
+                backgroundColor: data.status === 'accepted' ? '#f0fdf4' : '#fef2f2',
+                color: data.status === 'accepted' ? '#15803d' : '#b91c1c',
+                borderColor: data.status === 'accepted' ? '#bbf7d0' : '#fecaca'
+            }}>
+                {data.status === 'accepted' ? (
+                    <>
+                        <CheckCircle2 size={32} />
+                        <div>
+                            <h3>Orçamento Aprovado!</h3>
+                            <p>Obrigado pela confiança. Em breve entraremos em contato.</p>
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <XCircle size={32} />
+                        <div>
+                            <h3>Orçamento Rejeitado</h3>
+                            <p>Agradecemos a oportunidade.</p>
+                        </div>
+                    </>
+                )}
+            </div>
+        )}
+      </main>
 
-      </div>
+      <footer className={styles.footer}>
+        <p>Documento gerado automaticamente via CRM SaaS.</p>
+      </footer>
     </div>
   );
 }
