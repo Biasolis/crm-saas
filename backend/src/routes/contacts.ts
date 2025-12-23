@@ -46,10 +46,24 @@ export async function contactRoutes(app: FastifyInstance) {
 
       const result = await db.query(queryText, queryValues);
       
+      // Contagem para paginação
+      let countQuery = `SELECT COUNT(*) FROM contacts c WHERE c.tenant_id = $1`;
+      const countValues = [tenantId];
+      if (isAgent) {
+          countQuery += ` AND c.user_id = $2`;
+          countValues.push(userId);
+      }
+      if (search) {
+          countQuery += ` AND (c.name ILIKE $${countValues.length + 1} OR c.email ILIKE $${countValues.length + 1})`;
+          countValues.push(`%${search}%`);
+      }
+      const countRes = await db.query(countQuery, countValues);
+
       return reply.send({
         data: result.rows,
         page,
-        limit
+        limit,
+        total: parseInt(countRes.rows[0].count)
       });
 
     } catch (error) {
@@ -139,7 +153,7 @@ export async function contactRoutes(app: FastifyInstance) {
     const userId = request.user?.userId;
 
     try {
-        // 1. Verificação de Limite do Plano
+        // --- VERIFICAÇÃO DE LIMITE (INSERIDA) ---
         const limitCheck = await db.query(`
             SELECT 
                 p.max_contacts,
@@ -157,6 +171,7 @@ export async function contactRoutes(app: FastifyInstance) {
                 });
             }
         }
+        // ----------------------------------------
 
       const companyId = data.company_id || null;
 
@@ -291,7 +306,7 @@ export async function contactRoutes(app: FastifyInstance) {
     }
   });
 
-  // --- DELETE /api/contacts/:id (Excluir - Bloqueado) ---
+  // --- DELETE /api/contacts/:id (Excluir) ---
   app.delete('/:id', async (request, reply) => {
     if (request.user?.role === 'agent') {
         return reply.status(403).send({ error: 'Permission denied.' });

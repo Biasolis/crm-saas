@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
-import { Loader2, Ban, CheckCircle, ShieldAlert, Edit2, Trash2, X, Plus, Building2, Mail, Lock } from 'lucide-react';
+import { Loader2, Ban, CheckCircle, ShieldAlert, Edit2, Trash2, X, Plus, Building2, Mail, Lock, User } from 'lucide-react';
 import api from '@/services/api';
 
 interface Tenant { 
@@ -13,6 +13,7 @@ interface Tenant {
     plan_id: string; 
     plan_name?: string; 
     owner_email?: string;
+    owner_name?: string;
 }
 interface Plan { id: string; name: string; price: number; }
 
@@ -51,7 +52,7 @@ export default function AdminTenantsPage() {
   async function handleCreate(data: any) {
     try {
         await api.post('/api/admin/tenants', data);
-        alert('Empresa criada com sucesso!');
+        alert('Empresa e Usuário criados com sucesso!');
         setIsCreateOpen(false);
         resetCreate();
         loadData();
@@ -89,7 +90,7 @@ export default function AdminTenantsPage() {
   if (isLoading) return <div style={{padding:'4rem', display:'flex', justifyContent:'center'}}><Loader2 className="animate-spin" size={32} color="#2563eb"/></div>;
 
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto', paddingBottom: '2rem' }}>
+    <div style={{ maxWidth: '1200px', margin: '0 auto', paddingBottom: '2rem', padding: '1rem' }}>
       
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
@@ -116,11 +117,11 @@ export default function AdminTenantsPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
           <thead style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
             <tr>
-              <th style={{ padding: '1rem 1.5rem', color: '#4b5563', fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase' }}>Empresa / Dono</th>
+              <th style={{ padding: '1rem 1.5rem', color: '#4b5563', fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase' }}>Empresa</th>
+              <th style={{ padding: '1rem 1.5rem', color: '#4b5563', fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase' }}>Dono (Owner)</th>
               <th style={{ padding: '1rem 1.5rem', color: '#4b5563', fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase' }}>Plano</th>
               <th style={{ padding: '1rem 1.5rem', color: '#4b5563', fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase' }}>Status</th>
-              <th style={{ padding: '1rem 1.5rem', color: '#4b5563', fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase' }}>Cadastro</th>
-              <th style={{ padding: '1rem 1.5rem', textAlign: 'right' }}></th>
+              <th style={{ padding: '1rem 1.5rem', textAlign: 'right' }}>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -128,8 +129,14 @@ export default function AdminTenantsPage() {
               <tr key={t.id} style={{ borderBottom: '1px solid #f3f4f6', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = '#f9fafb'} onMouseOut={(e) => e.currentTarget.style.background = 'white'}>
                 <td style={{ padding: '1rem 1.5rem' }}>
                     <div style={{fontWeight: 600, color: '#111827'}}>{t.name}</div>
-                    <div style={{fontSize: '0.85rem', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px'}}>
-                        <Mail size={12}/> {t.owner_email || 'Sem dono'}
+                    <div style={{fontSize: '0.8rem', color: '#9ca3af'}}>ID: {t.id.slice(0,8)}...</div>
+                </td>
+                <td style={{ padding: '1rem 1.5rem' }}>
+                    <div style={{fontSize: '0.9rem', color: '#374151', display: 'flex', alignItems: 'center', gap: '4px'}}>
+                        <User size={14}/> {t.owner_name || 'N/A'}
+                    </div>
+                    <div style={{fontSize: '0.85rem', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '4px'}}>
+                        <Mail size={12}/> {t.owner_email || 'Sem email'}
                     </div>
                 </td>
                 <td style={{ padding: '1rem 1.5rem' }}>
@@ -146,9 +153,6 @@ export default function AdminTenantsPage() {
                     ? <span style={{color:'#16a34a', background: '#dcfce7', padding: '4px 10px', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 700, display:'inline-flex', alignItems:'center', gap:'4px'}}><CheckCircle size={12}/> ATIVO</span>
                     : <span style={{color:'#dc2626', background: '#fee2e2', padding: '4px 10px', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 700, display:'inline-flex', alignItems:'center', gap:'4px'}}><Ban size={12}/> SUSPENSO</span>
                   }
-                </td>
-                <td style={{ padding: '1rem 1.5rem', color: '#6b7280', fontSize: '0.9rem' }}>
-                    {new Date(t.created_at).toLocaleDateString()}
                 </td>
                 <td style={{ padding: '1rem 1.5rem', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
                   <button onClick={() => openEditModal(t)} title="Editar" style={{ border: '1px solid #d1d5db', background: 'white', padding: '6px', borderRadius: '6px', cursor: 'pointer', color: '#4b5563' }}><Edit2 size={16} /></button>

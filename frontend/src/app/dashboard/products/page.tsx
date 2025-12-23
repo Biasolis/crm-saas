@@ -2,212 +2,230 @@
 
 import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
-import { Plus, Package, Search, Edit2, Trash2, X, Loader2 } from 'lucide-react';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { Plus, Search, Package, Edit2, Trash2, Loader2, X, Archive } from 'lucide-react';
 import api from '@/services/api';
+import styles from './page.module.css';
 
 interface Product {
   id: string;
   name: string;
   description?: string;
   price: number;
-  sku?: string;
+  active: boolean;
 }
+
+const productSchema = z.object({
+  name: z.string().min(2, 'Nome é obrigatório'),
+  description: z.string().optional(),
+  price: z.coerce.number().min(0, 'Preço inválido'),
+  active: z.boolean().default(true)
+});
+
+type ProductFormData = z.infer<typeof productSchema>;
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
-  const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // Controle de Permissão
-  const [userRole, setUserRole] = useState<string>('');
-
-  // Modal e Edição
+  // Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const { register, handleSubmit, reset, setValue } = useForm();
+  const [isSaving, setIsSaving] = useState(false);
+
+  const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<ProductFormData>({
+    resolver: zodResolver(productSchema),
+    defaultValues: { active: true }
+  });
 
   useEffect(() => {
-    // 1. Identificar Role
-    const userData = localStorage.getItem('crm_user');
-    if (userData) {
-        try {
-            const parsed = JSON.parse(userData);
-            setUserRole(parsed.role);
-        } catch (e) { console.error(e); }
-    }
-
-    // 2. Carregar Dados
-    loadProducts();
+    fetchProducts();
   }, []);
 
-  async function loadProducts() {
-    setIsLoading(true);
+  async function fetchProducts() {
+    setLoading(true);
     try {
-      const response = await api.get('/api/products');
-      setProducts(response.data);
-      setFilteredProducts(response.data);
+      const res = await api.get('/api/products');
+      setProducts(res.data);
     } catch (error) {
       console.error(error);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   }
 
-  // Filtro de Busca Local
-  useEffect(() => {
-    const term = searchTerm.toLowerCase();
-    const filtered = products.filter(p => 
-        p.name.toLowerCase().includes(term) || 
-        p.sku?.toLowerCase().includes(term)
-    );
-    setFilteredProducts(filtered);
-  }, [searchTerm, products]);
+  // Filtro local (ou via API se preferir debounce)
+  const filteredProducts = products.filter(p => 
+    p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    p.description?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
-  // --- Ações (Só funcionam se o botão aparecer) ---
-
-  function openModal(product?: Product) {
+  function handleOpenModal(product?: Product) {
     if (product) {
       setEditingProduct(product);
       setValue('name', product.name);
-      setValue('description', product.description);
+      setValue('description', product.description || '');
       setValue('price', product.price);
-      setValue('sku', product.sku);
+      setValue('active', product.active);
     } else {
       setEditingProduct(null);
       reset();
+      setValue('active', true);
     }
     setIsModalOpen(true);
   }
 
-  async function handleSave(data: any) {
+  async function onSave(data: ProductFormData) {
+    setIsSaving(true);
     try {
-      const payload = { ...data, price: Number(data.price) };
-      
       if (editingProduct) {
-        await api.put(`/api/products/${editingProduct.id}`, payload);
+        await api.put(`/api/products/${editingProduct.id}`, data);
       } else {
-        await api.post('/api/products', payload);
+        await api.post('/api/products', data);
       }
-      
       setIsModalOpen(false);
-      loadProducts();
+      fetchProducts();
     } catch (error) {
       alert('Erro ao salvar produto.');
+    } finally {
+      setIsSaving(false);
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('Tem certeza que deseja excluir este produto?')) return;
+  async function onDelete(id: string) {
+    if (!confirm('Excluir este produto?')) return;
     try {
-      await api.delete(`/api/products/${id}`);
-      loadProducts();
+      const res = await api.delete(`/api/products/${id}`);
+      if (res.data.message?.includes('arquivado')) {
+        alert('Este produto já foi usado em propostas e foi arquivado ao invés de excluído.');
+      }
+      fetchProducts();
     } catch (error) {
       alert('Erro ao excluir produto.');
     }
   }
 
-  if (isLoading) return <div style={{display:'flex', justifyContent:'center', padding:'4rem'}}><Loader2 className="animate-spin" /></div>;
+  // Formatter
+  const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+
+  if (loading) return <div className={styles.loading}><Loader2 className="animate-spin" size={32}/></div>;
 
   return (
-    <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
-      
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+    <div className={styles.container}>
+      <div className={styles.header}>
         <div>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Package color="#2563eb" /> Catálogo de Produtos
-            </h1>
-            <p style={{ color: '#6b7280' }}>Gerencie os itens que sua empresa vende.</p>
+            <h1 className={styles.title}><Package size={24} color="#2563eb"/> Catálogo de Produtos</h1>
+            <p className={styles.subtitle}>Gerencie os itens disponíveis para suas propostas.</p>
         </div>
-        
-        {/* BOTÃO NOVO PRODUTO (Oculto para Vendedor) */}
-        {userRole !== 'agent' && (
-            <button 
-                onClick={() => openModal()}
-                style={{ 
-                    background: '#2563eb', color: 'white', border: 'none', padding: '0.75rem 1.25rem', 
-                    borderRadius: '8px', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem'
-                }}
-            >
-                <Plus size={20} /> Novo Produto
-            </button>
+        <button className={styles.addButton} onClick={() => handleOpenModal()}>
+          <Plus size={20} /> Novo Produto
+        </button>
+      </div>
+
+      <div className={styles.controls}>
+        <div className={styles.searchWrapper}>
+            <Search size={18} className={styles.searchIcon} />
+            <input 
+                placeholder="Buscar produtos..." 
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                className={styles.searchInput}
+            />
+        </div>
+      </div>
+
+      <div className={styles.tableContainer}>
+        {filteredProducts.length === 0 ? (
+            <div className={styles.emptyState}>Nenhum produto encontrado.</div>
+        ) : (
+            <table className={styles.table}>
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Descrição</th>
+                        <th>Preço Unit.</th>
+                        <th>Status</th>
+                        <th style={{textAlign:'right'}}>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {filteredProducts.map(product => (
+                        <tr key={product.id} style={{opacity: product.active ? 1 : 0.6}}>
+                            <td>
+                                <div style={{fontWeight: 600, color: '#374151'}}>{product.name}</div>
+                            </td>
+                            <td>
+                                <div style={{color: '#6b7280', fontSize: '0.9rem', maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                                    {product.description || '-'}
+                                </div>
+                            </td>
+                            <td>
+                                <div style={{fontWeight: 600, color: '#059669'}}>
+                                    {formatCurrency(Number(product.price))}
+                                </div>
+                            </td>
+                            <td>
+                                <span className={`${styles.badge} ${product.active ? styles.active : styles.inactive}`}>
+                                    {product.active ? 'Ativo' : 'Arquivado'}
+                                </span>
+                            </td>
+                            <td style={{textAlign: 'right'}}>
+                                <div className={styles.actions}>
+                                    <button onClick={() => handleOpenModal(product)} className={styles.iconBtn} title="Editar">
+                                        <Edit2 size={18} />
+                                    </button>
+                                    <button onClick={() => onDelete(product.id)} className={`${styles.iconBtn} ${styles.danger}`} title="Excluir">
+                                        {product.active ? <Trash2 size={18} /> : <Archive size={18}/>}
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         )}
       </div>
 
-      {/* Barra de Busca */}
-      <div style={{ marginBottom: '1.5rem', position: 'relative' }}>
-        <Search size={20} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
-        <input 
-            type="text" 
-            placeholder="Buscar por nome ou SKU..." 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            style={{ 
-                width: '100%', padding: '0.8rem 0.8rem 0.8rem 2.5rem', 
-                borderRadius: '8px', border: '1px solid #d1d5db', fontSize: '1rem' 
-            }} 
-        />
-      </div>
-
-      {/* Lista de Produtos */}
-      <div style={{ display: 'grid', gap: '1rem' }}>
-        {filteredProducts.map(product => (
-            <div key={product.id} style={{ background: 'white', padding: '1.5rem', borderRadius: '12px', border: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                    <h3 style={{ fontWeight: 600, fontSize: '1.1rem', color: '#1f2937' }}>{product.name}</h3>
-                    {product.sku && <span style={{ fontSize: '0.8rem', color: '#6b7280', background: '#f3f4f6', padding: '2px 6px', borderRadius: '4px' }}>SKU: {product.sku}</span>}
-                    <p style={{ color: '#6b7280', fontSize: '0.9rem', marginTop: '0.5rem' }}>{product.description || 'Sem descrição'}</p>
+      {/* Modal */}
+      {isModalOpen && (
+        <div className={styles.modalOverlay}>
+            <div className={styles.modalContent}>
+                <div className={styles.modalHeader}>
+                    <h3>{editingProduct ? 'Editar Produto' : 'Novo Produto'}</h3>
+                    <button onClick={() => setIsModalOpen(false)} className={styles.closeBtn}><X size={20}/></button>
                 </div>
-                
-                <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#059669', marginBottom: '0.5rem' }}>
-                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(product.price)}
+                <form onSubmit={handleSubmit(onSave)}>
+                    <div className={styles.formGroup}>
+                        <label>Nome do Produto/Serviço</label>
+                        <input {...register('name')} className={styles.input} placeholder="Ex: Consultoria Hora" />
+                        {errors.name && <span className={styles.error}>{errors.name.message}</span>}
                     </div>
                     
-                    {/* AÇÕES (Ocultas para Vendedor) */}
-                    {userRole !== 'agent' && (
-                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-                            <button onClick={() => openModal(product)} style={{ border: '1px solid #d1d5db', background: 'white', padding: '6px', borderRadius: '6px', cursor: 'pointer' }}><Edit2 size={16} color="#4b5563" /></button>
-                            <button onClick={() => handleDelete(product.id)} style={{ border: '1px solid #fee2e2', background: '#fef2f2', padding: '6px', borderRadius: '6px', cursor: 'pointer' }}><Trash2 size={16} color="#ef4444" /></button>
+                    <div className={styles.row}>
+                        <div className={styles.formGroup}>
+                            <label>Preço Unitário (R$)</label>
+                            <input {...register('price')} type="number" step="0.01" className={styles.input} />
+                            {errors.price && <span className={styles.error}>{errors.price.message}</span>}
                         </div>
-                    )}
-                </div>
-            </div>
-        ))}
-        {filteredProducts.length === 0 && <p style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem' }}>Nenhum produto encontrado.</p>}
-      </div>
+                        <div className={styles.formGroup} style={{display:'flex', alignItems:'center', marginTop:'1.5rem'}}>
+                            <input type="checkbox" {...register('active')} id="active" style={{width:'20px', height:'20px', marginRight:'8px'}} />
+                            <label htmlFor="active" style={{marginBottom:0, cursor:'pointer'}}>Disponível para venda</label>
+                        </div>
+                    </div>
 
-      {/* Modal Criar/Editar */}
-      {isModalOpen && (
-        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:50, display:'flex', alignItems:'center', justifyContent:'center'}}>
-            <div style={{background:'white', padding:'2rem', borderRadius:'12px', width:'500px', maxWidth:'95%'}}>
-                <div style={{display:'flex', justifyContent:'space-between', marginBottom:'1.5rem'}}>
-                    <h3 style={{fontWeight:700, fontSize:'1.25rem'}}>{editingProduct ? 'Editar Produto' : 'Novo Produto'}</h3>
-                    <button onClick={() => setIsModalOpen(false)} style={{background:'none', border:'none', cursor:'pointer'}}><X size={20}/></button>
-                </div>
-                <form onSubmit={handleSubmit(handleSave)} style={{display:'flex', flexDirection:'column', gap:'1rem'}}>
-                    <div>
-                        <label style={{display:'block', marginBottom:'0.3rem', fontSize:'0.9rem', fontWeight:600}}>Nome do Produto</label>
-                        <input {...register('name', {required:true})} style={{width:'100%', padding:'0.6rem', border:'1px solid #d1d5db', borderRadius:'6px'}} />
+                    <div className={styles.formGroup}>
+                        <label>Descrição</label>
+                        <textarea {...register('description')} className={styles.textarea} placeholder="Detalhes técnicos, escopo, etc..." />
                     </div>
-                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem'}}>
-                        <div>
-                            <label style={{display:'block', marginBottom:'0.3rem', fontSize:'0.9rem', fontWeight:600}}>Preço (R$)</label>
-                            <input {...register('price', {required:true})} type="number" step="0.01" style={{width:'100%', padding:'0.6rem', border:'1px solid #d1d5db', borderRadius:'6px'}} />
-                        </div>
-                        <div>
-                            <label style={{display:'block', marginBottom:'0.3rem', fontSize:'0.9rem', fontWeight:600}}>SKU (Código)</label>
-                            <input {...register('sku')} style={{width:'100%', padding:'0.6rem', border:'1px solid #d1d5db', borderRadius:'6px'}} />
-                        </div>
+
+                    <div className={styles.modalFooter}>
+                        <button type="button" className={styles.btnCancel} onClick={() => setIsModalOpen(false)}>Cancelar</button>
+                        <button type="submit" disabled={isSaving} className={styles.btnSave}>
+                            {isSaving ? <Loader2 className="animate-spin" size={16} /> : 'Salvar'}
+                        </button>
                     </div>
-                    <div>
-                        <label style={{display:'block', marginBottom:'0.3rem', fontSize:'0.9rem', fontWeight:600}}>Descrição</label>
-                        <textarea {...register('description')} rows={3} style={{width:'100%', padding:'0.6rem', border:'1px solid #d1d5db', borderRadius:'6px'}} />
-                    </div>
-                    <button type="submit" style={{marginTop:'1rem', background:'#2563eb', color:'white', border:'none', padding:'0.8rem', borderRadius:'6px', fontWeight:600, cursor:'pointer'}}>
-                        Salvar Produto
-                    </button>
                 </form>
             </div>
         </div>

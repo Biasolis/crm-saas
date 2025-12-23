@@ -6,124 +6,128 @@ import { authenticate } from '../middleware/auth';
 export async function productRoutes(app: FastifyInstance) {
   app.addHook('onRequest', authenticate);
 
-  // --- GET /api/products (Listar - Permitido para todos) ---
+  // GET /api/products
   app.get('/', async (request, reply) => {
-    const tenantId = request.user?.tenantId;
-    const searchSchema = z.object({
-      search: z.string().optional(),
-    });
-    const { search } = searchSchema.parse(request.query);
+    const { tenantId } = request.user!;
+    const { search } = request.query as { search?: string };
 
     try {
-      let queryText = `
+      let query = `
         SELECT * FROM products 
-        WHERE tenant_id = $1 AND active = true
+        WHERE tenant_id = $1 
       `;
-      const values: any[] = [tenantId];
+      const params: any[] = [tenantId];
 
       if (search) {
-        queryText += ` AND (name ILIKE $2 OR sku ILIKE $2)`;
-        values.push(`%${search}%`);
+        query += ` AND (name ILIKE $2 OR description ILIKE $2)`;
+        params.push(`%${search}%`);
       }
 
-      queryText += ` ORDER BY name ASC`;
+      query += ` ORDER BY name ASC`;
 
-      const result = await db.query(queryText, values);
+      const result = await db.query(query, params);
       return result.rows;
     } catch (error) {
-      console.error(error);
       return reply.status(500).send({ error: 'Failed to fetch products' });
     }
   });
 
-  // --- POST /api/products (Criar - BLOQUEADO PARA AGENT) ---
+  // POST /api/products
   app.post('/', async (request, reply) => {
-    // TRAVA DE SEGURANÇA
-    if (request.user?.role === 'agent') {
-        return reply.status(403).send({ error: 'Permissão negada. Vendedores não podem criar produtos.' });
-    }
-
-    const createProductSchema = z.object({
+    const schema = z.object({
       name: z.string().min(2),
       description: z.string().optional(),
       price: z.number().min(0),
-      sku: z.string().optional(),
+      active: z.boolean().default(true)
     });
 
-    const data = createProductSchema.parse(request.body);
-    const tenantId = request.user?.tenantId;
+    const data = schema.parse(request.body);
+    const { tenantId } = request.user!;
 
     try {
       const result = await db.query(`
-        INSERT INTO products (tenant_id, name, description, price, sku)
+        INSERT INTO products (tenant_id, name, description, price, active)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING *
-      `, [tenantId, data.name, data.description, data.price, data.sku]);
+      `, [tenantId, data.name, data.description || '', data.price, data.active]);
 
       return reply.status(201).send(result.rows[0]);
     } catch (error) {
-      console.error(error);
       return reply.status(500).send({ error: 'Failed to create product' });
     }
   });
 
-  // --- PUT /api/products/:id (Editar - BLOQUEADO PARA AGENT) ---
+  // PUT /api/products/:id
   app.put('/:id', async (request, reply) => {
-    // TRAVA DE SEGURANÇA
-    if (request.user?.role === 'agent') {
-        return reply.status(403).send({ error: 'Permissão negada. Vendedores não podem editar produtos.' });
-    }
-
     const paramsSchema = z.object({ id: z.string().uuid() });
-    const updateSchema = z.object({
-      name: z.string().min(2),
+    const bodySchema = z.object({
+      name: z.string().optional(),
       description: z.string().optional(),
-      price: z.number().min(0),
-      sku: z.string().optional(),
+      price: z.number().optional(),
+      active: z.boolean().optional()
     });
 
     const { id } = paramsSchema.parse(request.params);
-    const data = updateSchema.parse(request.body);
-    const tenantId = request.user?.tenantId;
+    const data = bodySchema.parse(request.body);
+    const { tenantId } = request.user!;
 
     try {
-      const result = await db.query(`
-        UPDATE products 
-        SET name = $1, description = $2, price = $3, sku = $4
-        WHERE id = $5 AND tenant_id = $6
-        RETURNING *
-      `, [data.name, data.description, data.price, data.sku, id, tenantId]);
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
 
+      Object.entries(data).forEach(([key, value]) => {
+        if (value !== undefined) {
+          fields.push(`${key} = $${idx}`);
+          values.push(value);
+          idx++;
+        }
+      });
+
+      if (fields.length === 0) return reply.send({ message: 'No changes' });
+
+      values.push(id, tenantId);
+      const query = `
+        UPDATE products 
+        SET ${fields.join(', ')} 
+        WHERE id = $${idx} AND tenant_id = $${idx+1}
+        RETURNING *
+      `;
+
+      const result = await db.query(query, values);
+      
       if (result.rowCount === 0) return reply.status(404).send({ error: 'Product not found' });
       return result.rows[0];
+
     } catch (error) {
-      console.error(error);
       return reply.status(500).send({ error: 'Failed to update product' });
     }
   });
 
-  // --- DELETE /api/products/:id (Arquivar/Excluir - BLOQUEADO PARA AGENT) ---
+  // DELETE /api/products/:id
   app.delete('/:id', async (request, reply) => {
-    // TRAVA DE SEGURANÇA
-    if (request.user?.role === 'agent') {
-        return reply.status(403).send({ error: 'Permissão negada. Vendedores não podem excluir produtos.' });
-    }
-
-    const paramsSchema = z.object({ id: z.string().uuid() });
-    const { id } = paramsSchema.parse(request.params);
-    const tenantId = request.user?.tenantId;
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { tenantId } = request.user!;
 
     try {
-      const result = await db.query(`
-        UPDATE products SET active = false
-        WHERE id = $1 AND tenant_id = $2
-        RETURNING id
-      `, [id, tenantId]);
+      // Soft delete ou Hard delete? 
+      // Se já estiver em propostas, não deveríamos apagar.
+      // Por simplicidade, vamos tentar apagar. O banco deve ter FKs com ON DELETE SET NULL ou restrict.
+      // Se der erro de FK, retornamos erro amigável.
+      
+      const check = await db.query('SELECT id FROM proposal_items WHERE product_id = $1 LIMIT 1', [id]);
+      if (check.rowCount && check.rowCount > 0) {
+          // Se já usado, apenas desativa
+          await db.query('UPDATE products SET active = FALSE WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+          return { message: 'Produto arquivado (já utilizado em propostas).' };
+      }
 
+      const result = await db.query('DELETE FROM products WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+      
       if (result.rowCount === 0) return reply.status(404).send({ error: 'Product not found' });
-      return { message: 'Product archived successfully' };
+      return { message: 'Deleted successfully' };
+
     } catch (error) {
-      console.error(error);
       return reply.status(500).send({ error: 'Failed to delete product' });
     }
   });

@@ -7,7 +7,7 @@ import { authenticate } from '../middleware/auth';
 export async function userRoutes(app: FastifyInstance) {
   
   // ==========================================================
-  // ROTA PÚBLICA: Cadastro Inicial / Sign Up
+  // ROTA PÚBLICA: Cadastro Inicial / Sign Up (SaaS)
   // ==========================================================
   app.post('/', async (request, reply) => {
     const createUserBody = z.object({
@@ -53,15 +53,87 @@ export async function userRoutes(app: FastifyInstance) {
   });
 
   // ==========================================================
-  // ROTAS PROTEGIDAS: Gestão de Equipe (IAM)
+  // ROTAS PROTEGIDAS
   // ==========================================================
   app.register(async (protectedRoutes) => {
     protectedRoutes.addHook('onRequest', authenticate);
 
-    // --- GET: Listar Equipe ---
+    // --- MEU PERFIL (Self-Service) ---
+    
+    // GET /api/users/me -> Dados do usuário logado
+    protectedRoutes.get('/me', async (request, reply) => {
+        const { userId } = request.user!;
+        try {
+            const result = await db.query(`
+                SELECT id, name, email, role, created_at, last_lead_assigned_at 
+                FROM users WHERE id = $1
+            `, [userId]);
+            
+            if (result.rowCount === 0) return reply.status(404).send({ error: 'User not found' });
+            return result.rows[0];
+        } catch (error) {
+            return reply.status(500).send({ error: 'Failed to fetch profile' });
+        }
+    });
+
+    // PUT /api/users/me -> Atualizar próprios dados
+    protectedRoutes.put('/me', async (request, reply) => {
+        const { userId } = request.user!;
+        const schema = z.object({
+            name: z.string().min(2).optional(),
+            email: z.string().email().optional(),
+            password: z.string().min(6).optional(),
+            current_password: z.string().optional() // Exigido se mudar senha
+        });
+
+        const data = schema.parse(request.body);
+
+        try {
+            // Se for alterar senha, precisa verificar a atual
+            if (data.password) {
+                if (!data.current_password) {
+                    return reply.status(400).send({ error: 'Senha atual é obrigatória para definir uma nova.' });
+                }
+                const userRes = await db.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+                const valid = await bcrypt.compare(data.current_password, userRes.rows[0].password_hash);
+                if (!valid) {
+                    return reply.status(403).send({ error: 'Senha atual incorreta.' });
+                }
+            }
+
+            const fields: string[] = [];
+            const values: any[] = [];
+            let idx = 1;
+
+            if (data.name) { fields.push(`name = $${idx++}`); values.push(data.name); }
+            if (data.email) { fields.push(`email = $${idx++}`); values.push(data.email); }
+            if (data.password) {
+                const salt = await bcrypt.genSalt(10);
+                const hash = await bcrypt.hash(data.password, salt);
+                fields.push(`password_hash = $${idx++}`);
+                values.push(hash);
+            }
+
+            if (fields.length === 0) return reply.send({ message: 'No changes' });
+
+            values.push(userId);
+            const query = `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, name, email`;
+            
+            const result = await db.query(query, values);
+            return result.rows[0];
+
+        } catch (error: any) {
+            // Erro de unique constraint (email duplicado)
+            if (error.code === '23505') return reply.status(409).send({ error: 'Email já está em uso.' });
+            return reply.status(500).send({ error: 'Failed to update profile' });
+        }
+    });
+
+    // --- GESTÃO DE EQUIPE (Admin/Owner) ---
+
+    // GET /api/users
     protectedRoutes.get('/', async (request, reply) => {
       const tenantId = request.user?.tenantId;
-
       try {
           const result = await db.query(`
               SELECT id, name, email, role, created_at 
@@ -69,15 +141,13 @@ export async function userRoutes(app: FastifyInstance) {
               WHERE tenant_id = $1
               ORDER BY name ASC
           `, [tenantId]);
-
           return result.rows;
       } catch (error) {
-          console.error(error);
           return reply.status(500).send({ error: 'Failed to fetch users' });
       }
     });
 
-    // --- POST: Convidar/Adicionar Membro ---
+    // POST /api/users/invite
     protectedRoutes.post('/invite', async (request, reply) => {
       if (request.user?.role !== 'owner' && request.user?.role !== 'admin') {
         return reply.status(403).send({ error: 'Permission denied.' });
@@ -110,9 +180,7 @@ export async function userRoutes(app: FastifyInstance) {
             const { max_users, current_count } = limitCheck.rows[0];
             if (Number(current_count) >= Number(max_users)) {
                 client.release();
-                return reply.status(403).send({ 
-                    error: `Limite de usuários atingido (${current_count}/${max_users}).` 
-                });
+                return reply.status(403).send({ error: `Limite de usuários atingido.` });
             }
         }
 
@@ -135,12 +203,11 @@ export async function userRoutes(app: FastifyInstance) {
         return reply.status(201).send(result.rows[0]);
 
       } catch (error) {
-        console.error(error);
         return reply.status(500).send({ error: 'Failed to add member' });
       }
     });
 
-    // --- PUT: Editar Membro (Novo) ---
+    // PUT /api/users/:id (Admin editando outro usuário)
     protectedRoutes.put('/:id', async (request, reply) => {
         if (request.user?.role !== 'owner' && request.user?.role !== 'admin') {
             return reply.status(403).send({ error: 'Permission denied' });
@@ -158,9 +225,6 @@ export async function userRoutes(app: FastifyInstance) {
         const data = updateSchema.parse(request.body);
         const tenantId = request.user?.tenantId;
 
-        // Impede alterar o próprio role se não for Owner (para evitar lock-out)
-        // Mas vamos manter simples: Admin pode editar Agent. Owner pode editar Admin/Agent.
-        
         try {
             const fields: string[] = [];
             const values: any[] = [];
@@ -197,7 +261,7 @@ export async function userRoutes(app: FastifyInstance) {
         }
     });
 
-    // --- DELETE: Remover Membro ---
+    // DELETE /api/users/:id
     protectedRoutes.delete('/:id', async (request, reply) => {
       if (request.user?.role !== 'owner' && request.user?.role !== 'admin') {
         return reply.status(403).send({ error: 'Permission denied' });
@@ -212,16 +276,10 @@ export async function userRoutes(app: FastifyInstance) {
       const tenantId = request.user?.tenantId;
 
       try {
-        const result = await db.query(`
-          DELETE FROM users WHERE id = $1 AND tenant_id = $2 RETURNING id
-        `, [id, tenantId]);
-
+        const result = await db.query(`DELETE FROM users WHERE id = $1 AND tenant_id = $2 RETURNING id`, [id, tenantId]);
         if (result.rowCount === 0) return reply.status(404).send({ error: 'User not found' });
-        
         return { message: 'User removed successfully' };
-
       } catch (error) {
-        console.error(error);
         return reply.status(500).send({ error: 'Failed to remove user' });
       }
     });
